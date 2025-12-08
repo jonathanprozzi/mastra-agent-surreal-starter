@@ -7,3 +7,6 @@ dist
 *.db
 *.db-*
 bun.lock
+
+# Local SurrealDB data
+data/

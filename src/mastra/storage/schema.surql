@@ -4,7 +4,7 @@
 -- ============================================
 -- 1. THREADS (conversation threads)
 -- ============================================
-DEFINE TABLE mastra_threads SCHEMAFULL;
+DEFINE TABLE mastra_threads SCHEMAFULL PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_threads TYPE string;
 DEFINE FIELD resourceId ON mastra_threads TYPE string;
 DEFINE FIELD title ON mastra_threads TYPE option<string>;
@@ -19,11 +19,11 @@ DEFINE INDEX idx_threads_resource_created ON mastra_threads FIELDS resourceId, c
 -- ============================================
 -- 2. MESSAGES (conversation messages)
 -- ============================================
-DEFINE TABLE mastra_messages SCHEMAFULL;
+DEFINE TABLE mastra_messages SCHEMALESS PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_messages TYPE string;
 DEFINE FIELD threadId ON mastra_messages TYPE string;
 DEFINE FIELD role ON mastra_messages TYPE string ASSERT $value IN ['user', 'assistant', 'system', 'tool'];
-DEFINE FIELD content ON mastra_messages TYPE any; -- string or array for v2 format
+-- content can be string or array (v2 format), using SCHEMALESS for flexibility
 DEFINE FIELD toolCalls ON mastra_messages TYPE option<array<object>>;
 DEFINE FIELD toolCallId ON mastra_messages TYPE option<string>;
 DEFINE FIELD createdAt ON mastra_messages TYPE datetime DEFAULT time::now();
@@ -39,7 +39,7 @@ DEFINE INDEX idx_messages_thread_created ON mastra_messages FIELDS threadId, cre
 -- ============================================
 -- 3. WORKFLOW SNAPSHOTS (suspended workflow state)
 -- ============================================
-DEFINE TABLE mastra_workflow_snapshot SCHEMAFULL;
+DEFINE TABLE mastra_workflow_snapshot SCHEMAFULL PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_workflow_snapshot TYPE string;
 DEFINE FIELD workflowId ON mastra_workflow_snapshot TYPE string;
 DEFINE FIELD runId ON mastra_workflow_snapshot TYPE string;
@@ -53,7 +53,7 @@ DEFINE INDEX idx_workflow_snapshot_run ON mastra_workflow_snapshot FIELDS workfl
 -- ============================================
 -- 4. TRACES (OpenTelemetry data)
 -- ============================================
-DEFINE TABLE mastra_traces SCHEMAFULL;
+DEFINE TABLE mastra_traces SCHEMAFULL PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_traces TYPE string;
 DEFINE FIELD traceId ON mastra_traces TYPE string;
 DEFINE FIELD parentSpanId ON mastra_traces TYPE option<string>;
@@ -73,12 +73,10 @@ DEFINE INDEX idx_traces_name ON mastra_traces FIELDS name;
 -- ============================================
 -- 5. EVALS (evaluation results)
 -- ============================================
-DEFINE TABLE mastra_evals SCHEMAFULL;
+DEFINE TABLE mastra_evals SCHEMALESS PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_evals TYPE string;
 DEFINE FIELD name ON mastra_evals TYPE string;
-DEFINE FIELD input ON mastra_evals TYPE any;
-DEFINE FIELD output ON mastra_evals TYPE any;
-DEFINE FIELD expected ON mastra_evals TYPE option<any>;
+-- input, output, expected can be any type - using SCHEMALESS
 DEFINE FIELD score ON mastra_evals TYPE option<float>;
 DEFINE FIELD metadata ON mastra_evals TYPE option<object>;
 DEFINE FIELD createdAt ON mastra_evals TYPE datetime DEFAULT time::now();
@@ -89,7 +87,7 @@ DEFINE INDEX idx_evals_name ON mastra_evals FIELDS name;
 -- ============================================
 -- 6. SCORERS (scoring data)
 -- ============================================
-DEFINE TABLE mastra_scorers SCHEMAFULL;
+DEFINE TABLE mastra_scorers SCHEMAFULL PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_scorers TYPE string;
 DEFINE FIELD name ON mastra_scorers TYPE string;
 DEFINE FIELD score ON mastra_scorers TYPE float;
@@ -103,11 +101,11 @@ DEFINE INDEX idx_scorers_name ON mastra_scorers FIELDS name;
 -- ============================================
 -- 7. RESOURCES (working memory / resource-scoped)
 -- ============================================
-DEFINE TABLE mastra_resources SCHEMAFULL;
+DEFINE TABLE mastra_resources SCHEMALESS PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_resources TYPE string;
 DEFINE FIELD resourceId ON mastra_resources TYPE string;
 DEFINE FIELD key ON mastra_resources TYPE string;
-DEFINE FIELD value ON mastra_resources TYPE any;
+-- value can be any type - using SCHEMALESS
 DEFINE FIELD metadata ON mastra_resources TYPE option<object>;
 DEFINE FIELD createdAt ON mastra_resources TYPE datetime DEFAULT time::now();
 DEFINE FIELD updatedAt ON mastra_resources TYPE datetime DEFAULT time::now();

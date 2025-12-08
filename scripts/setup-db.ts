@@ -12,8 +12,8 @@ async function setup() {
   const db = new Surreal();
 
   try {
-    // Load config from env
-    const url = process.env.SURREALDB_URL || 'ws://localhost:8000';
+    // Load config from env (use http:// for root user access)
+    const url = process.env.SURREALDB_URL || 'http://localhost:8000';
     const namespace = process.env.SURREALDB_NS || 'mastra';
     const database = process.env.SURREALDB_DB || 'development';
     const username = process.env.SURREALDB_USER || 'root';

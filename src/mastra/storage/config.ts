@@ -5,7 +5,7 @@ import { z } from 'zod';
  */
 export const SurrealDBConfigSchema = z.object({
   // Connection
-  url: z.string().url().default('ws://localhost:8000'),
+  url: z.string().url().default('http://localhost:8000'),
   namespace: z.string().default('mastra'),
   database: z.string().default('development'),
 
@@ -31,7 +31,8 @@ export type SurrealDBConfig = z.infer<typeof SurrealDBConfigSchema>;
  */
 export function loadConfigFromEnv(): SurrealDBConfig {
   return SurrealDBConfigSchema.parse({
-    url: process.env.SURREALDB_URL,
+    // Use HTTP for root user access (more reliable than WS for auth)
+    url: process.env.SURREALDB_URL || 'http://localhost:8000',
     namespace: process.env.SURREALDB_NS,
     database: process.env.SURREALDB_DB,
     username: process.env.SURREALDB_USER,

@@ -5,16 +5,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - surrealdb-data:/data
-    command: start --user root --pass root file:/data/mastra.db
+      - ./data/surreal:/mydata
+    command: start --user root --pass root --bind 0.0.0.0:8000 rocksdb:/mydata/mastra.db
     environment:
       - SURREAL_LOG=info
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "/surreal", "isready", "--conn", "http://localhost:8000"]
       interval: 10s
       timeout: 5s
       retries: 5
-
-volumes:
-  surrealdb-data:
-    driver: local

@@ -9,7 +9,8 @@
     "build": "mastra build",
     "start": "mastra start",
     "db:setup": "bun run scripts/setup-db.ts",
-    "db:reset": "bash scripts/reset-db.sh"
+    "db:reset": "bash scripts/reset-db.sh",
+    "test:surreal": "bun run scripts/test-surreal.ts"
   },
   "dependencies": {
     "@mastra/core": "^0.22.2",
