@@ -4,10 +4,13 @@ Production-ready [Mastra](https://mastra.ai) agent starter with SurrealDB storag
 
 ## Features
 
-- **SurrealDB Storage Adapter** — Full implementation for threads, messages, workflows, traces, evals, and resources
+- **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraStorage` for full Mastra compatibility
+- **Agent Memory** — Persistent conversation threads and messages across sessions
+- **Working Memory** — Resource storage for agent state
+- **Workflow Persistence** — Snapshot and resume workflow executions
 - **Vector Search Ready** — HNSW indexes for semantic memory (just uncomment in schema)
 - **Docker Setup** — One command to start SurrealDB locally
-- **Example Agent** — Working agent with tools and workflows
+- **Example Agent** — Working agent with tools, memory, and workflows
 - **Bun Compatible** — Fast development with Bun runtime
 
 ## Quick Start
@@ -73,32 +76,49 @@ The adapter implements storage for all Mastra data types:
 ### Usage
 
 ```typescript
-import { SurrealDBStore } from './src/mastra/storage';
+import { SurrealStore } from './src/mastra/storage';
 
-const store = new SurrealDBStore();
-await store.init(true); // true = apply schema
+const store = new SurrealStore();
+await store.init();
 
-// Create a thread
-const thread = await store.createThread({
-  id: 'thread-1',
-  resourceId: 'user-123',
-  title: 'My Conversation',
+// Save a thread (MastraStorage interface)
+const thread = await store.saveThread({
+  thread: {
+    id: 'thread-1',
+    resourceId: 'user-123',
+    title: 'My Conversation',
+    metadata: {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
 });
 
-// Add messages
-await store.addMessage({
-  id: 'msg-1',
-  threadId: 'thread-1',
-  role: 'user',
-  content: 'Hello!',
+// Save messages
+await store.saveMessages({
+  messages: [
+    {
+      id: 'msg-1',
+      threadId: 'thread-1',
+      role: 'user',
+      content: 'Hello!',
+      createdAt: new Date(),
+      type: 'text',
+    },
+  ],
 });
 
-// Store working memory
-await store.setResource({
-  id: 'res-1',
-  resourceId: 'user-123',
-  key: 'preferences',
-  value: { theme: 'dark' },
+// Get messages from a thread
+const messages = await store.getMessages({ threadId: 'thread-1' });
+
+// Save resource (working memory)
+await store.saveResource({
+  resource: {
+    id: 'user-123',
+    workingMemory: JSON.stringify({ theme: 'dark' }),
+    metadata: {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
 });
 
 // Close when done
@@ -154,6 +174,35 @@ If running alongside other projects:
 | mastra-agent-surreal-starter | `8000` | — |
 | intuition-portal | — | `6378` |
 | intuition-weave | `8001` | `6377` |
+
+## Architecture
+
+The `SurrealStore` class extends `MastraStorage` from `@mastra/core/storage`, providing a SurrealDB-backed implementation of all storage operations. This follows the same pattern as official Mastra stores:
+
+- **PostgresStore** (`@mastra/pg`) - Uses domain classes (MemoryPG, WorkflowsPG, etc.)
+- **LibSQLStore** (`@mastra/libsql`) - SQLite-compatible with WAL mode
+- **MongoDBStore** (`@mastra/mongodb`) - Document-oriented NoSQL
+
+### Future Improvements
+
+Based on analysis of official Mastra stores, these enhancements would align with best practices:
+
+1. **Domain Classes** - Refactor into separate domain classes:
+   - `SurrealOperations` - Core table operations
+   - `SurrealMemory` - Thread/message persistence
+   - `SurrealWorkflows` - Workflow state management
+   - `SurrealScores` - Evaluation scoring
+   - `SurrealObservability` - Tracing and spans
+
+2. **CI/CD Support** - Add `disableInit` flag (like LibSQLStore) for deployment pipelines
+
+3. **Retry Mechanism** - Implement exponential backoff for connection issues
+
+4. **Full Observability** - Implement span creation/update methods for tracing
+
+5. **Agents Domain** - Add AgentsSurreal for agent-specific operations
+
+6. **Contribute to Mastra** - Package as `@mastra/surrealdb` for the official stores collection
 
 ## License
 

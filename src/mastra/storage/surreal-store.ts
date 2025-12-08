@@ -188,17 +188,38 @@ export class SurrealStore extends MastraStorage {
     threadId: string;
   }): Promise<StorageThreadType | null> {
     await this.init();
+    // Use SurrealDB record syntax for direct lookup
     const results = await this.db.query<[StorageThreadType[]]>(
-      'SELECT * FROM mastra_threads WHERE id = $threadId LIMIT 1',
+      'SELECT * FROM type::thing("mastra_threads", $threadId)',
       { threadId }
     );
     const thread = results[0]?.[0];
     if (!thread) return null;
     return {
       ...thread,
+      id: this.normalizeId(thread.id),
       createdAt: this.ensureDate(thread.createdAt) || new Date(),
       updatedAt: this.ensureDate(thread.updatedAt) || new Date(),
     };
+  }
+
+  // Helper to normalize SurrealDB record IDs to plain strings
+  private normalizeId(id: any): string {
+    if (!id) return id;
+    // Handle SurrealDB RecordId objects
+    if (typeof id === 'object' && id.id) {
+      return String(id.id);
+    }
+    // Handle string format like "mastra_threads:uuid" or "mastra_threads:⟨uuid⟩"
+    const str = String(id);
+    if (str.includes(':')) {
+      const parts = str.split(':');
+      let idPart = parts.slice(1).join(':');
+      // Remove angle brackets if present
+      idPart = idPart.replace(/^[⟨<]/, '').replace(/[⟩>]$/, '');
+      return idPart;
+    }
+    return str;
   }
 
   async getThreadsByResourceId(
@@ -212,6 +233,7 @@ export class SurrealStore extends MastraStorage {
     );
     return (results[0] || []).map((t) => ({
       ...t,
+      id: this.normalizeId(t.id),
       createdAt: this.ensureDate(t.createdAt) || new Date(),
       updatedAt: this.ensureDate(t.updatedAt) || new Date(),
     }));
@@ -239,6 +261,7 @@ export class SurrealStore extends MastraStorage {
 
     const threads = (results[0] || []).map((t) => ({
       ...t,
+      id: this.normalizeId(t.id),
       createdAt: this.ensureDate(t.createdAt) || new Date(),
       updatedAt: this.ensureDate(t.updatedAt) || new Date(),
     }));
@@ -294,13 +317,14 @@ export class SurrealStore extends MastraStorage {
   }): Promise<StorageThreadType> {
     await this.init();
     const results = await this.db.query<[StorageThreadType[]]>(
-      `UPDATE mastra_threads SET title = $title, metadata = $metadata, updatedAt = time::now() WHERE id = $id RETURN AFTER`,
+      `UPDATE type::thing("mastra_threads", $id) SET title = $title, metadata = $metadata, updatedAt = time::now() RETURN AFTER`,
       { id, title, metadata }
     );
     const thread = results[0]?.[0];
     if (!thread) throw new Error(`Thread ${id} not found`);
     return {
       ...thread,
+      id: this.normalizeId(thread.id),
       createdAt: this.ensureDate(thread.createdAt) || new Date(),
       updatedAt: this.ensureDate(thread.updatedAt) || new Date(),
     };
@@ -310,8 +334,8 @@ export class SurrealStore extends MastraStorage {
     await this.init();
     // Delete messages first
     await this.db.query('DELETE FROM mastra_messages WHERE threadId = $threadId', { threadId });
-    // Delete thread
-    await this.db.query('DELETE FROM mastra_threads WHERE id = $threadId', { threadId });
+    // Delete thread using SurrealDB record syntax
+    await this.db.query('DELETE type::thing("mastra_threads", $threadId)', { threadId });
   }
 
   // ============================================
@@ -335,6 +359,8 @@ export class SurrealStore extends MastraStorage {
     const messages = results[0] || [];
     return messages.map((m) => ({
       ...m,
+      id: this.normalizeId(m.id),
+      threadId: m.threadId, // Keep threadId as-is since it's stored as plain string
       createdAt: this.ensureDate(m.createdAt) || new Date(),
     }));
   }
@@ -349,12 +375,14 @@ export class SurrealStore extends MastraStorage {
     format?: 'v1' | 'v2';
   }): Promise<MastraMessageV1[] | MastraMessageV2[]> {
     await this.init();
+    // Build query for multiple message IDs using SurrealDB record syntax
+    const recordIds = messageIds.map(id => `type::thing("mastra_messages", "${id}")`).join(', ');
     const results = await this.db.query<[any[]]>(
-      'SELECT * FROM mastra_messages WHERE id IN $messageIds',
-      { messageIds }
+      `SELECT * FROM [${recordIds}]`
     );
     return (results[0] || []).map((m) => ({
       ...m,
+      id: this.normalizeId(m.id),
       createdAt: this.ensureDate(m.createdAt) || new Date(),
     }));
   }
@@ -386,7 +414,19 @@ export class SurrealStore extends MastraStorage {
         ...msg,
         createdAt: (msg as any).createdAt || new Date(),
       };
-      await this.db.create('mastra_messages', toSave);
+      // Use INSERT with explicit ID to control the record ID
+      await this.db.query(
+        `INSERT INTO mastra_messages {
+          id: $id,
+          threadId: $threadId,
+          role: $role,
+          content: $content,
+          type: $type,
+          createdAt: $createdAt
+        } ON DUPLICATE KEY UPDATE
+          content = $content`,
+        toSave
+      );
       saved.push(toSave);
     }
 
@@ -406,11 +446,12 @@ export class SurrealStore extends MastraStorage {
 
     for (const msg of messages) {
       const results = await this.db.query<[MastraMessageV2[]]>(
-        `UPDATE mastra_messages SET content = $content WHERE id = $id RETURN AFTER`,
+        `UPDATE type::thing("mastra_messages", $id) SET content = $content RETURN AFTER`,
         { id: msg.id, content: msg.content }
       );
       if (results[0]?.[0]) {
-        updated.push(results[0][0]);
+        const m = results[0][0];
+        updated.push({ ...m, id: this.normalizeId(m.id) } as MastraMessageV2);
       }
     }
 
@@ -419,7 +460,10 @@ export class SurrealStore extends MastraStorage {
 
   async deleteMessages(messageIds: string[]): Promise<void> {
     await this.init();
-    await this.db.query('DELETE FROM mastra_messages WHERE id IN $messageIds', { messageIds });
+    // Delete each message using record syntax
+    for (const messageId of messageIds) {
+      await this.db.query('DELETE type::thing("mastra_messages", $messageId)', { messageId });
+    }
   }
 
   // ============================================
