@@ -1,6 +1,7 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { Agent } from '@mastra/core/agent';
 import { tools } from '../tools';
+import { memory } from '../memory';
 
 /**
  * Example agent - Assistant
@@ -20,6 +21,7 @@ Be concise and helpful in your responses.`,
     getTimestamp: tools.getTimestamp,
     echo: tools.echo,
   },
+  memory,
 });
 
 export const agents = {
