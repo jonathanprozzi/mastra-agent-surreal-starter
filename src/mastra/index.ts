@@ -2,22 +2,15 @@ import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
 
 import { agents } from './agents';
-import { tools } from './tools';
 import { workflows } from './workflows';
-import { SurrealDBStore } from './storage';
+import { SurrealStore } from './storage';
 
-// Initialize SurrealDB storage
-// Note: For now we're not using SurrealDB as Mastra's primary storage
-// since Mastra expects a specific storage interface. Instead, SurrealDBStore
-// is available for custom memory/state operations alongside Mastra.
-//
-// TODO: Implement full MastraStorage interface wrapper if needed
-
-export const surrealStore = new SurrealDBStore();
+// Initialize SurrealDB storage for Mastra
+export const surrealStore = new SurrealStore();
 
 export const mastra = new Mastra({
   agents,
-  tools,
+  storage: surrealStore,
   workflows: {
     textProcessingWorkflow: workflows.textProcessingWorkflow,
   },
@@ -31,4 +24,4 @@ export const mastra = new Mastra({
 export { agents } from './agents';
 export { tools } from './tools';
 export { workflows } from './workflows';
-export { SurrealDBStore } from './storage';
+export { SurrealStore } from './storage';

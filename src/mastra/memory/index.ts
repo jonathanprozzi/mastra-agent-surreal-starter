@@ -1,21 +1,19 @@
 /**
  * Memory configuration for Mastra agents
  *
- * Uses LibSQL for conversation memory (proven, simple)
- * SurrealDB available via surrealStore for custom state/graph operations
+ * Uses SurrealDB for conversation memory via the SurrealStore adapter.
+ * SurrealDB provides document, vector, and graph capabilities in a single database.
  */
 
 import { anthropic } from '@ai-sdk/anthropic';
 import { Memory } from '@mastra/memory';
-import { LibSQLStore } from '@mastra/libsql';
+import { SurrealStore } from '../storage';
 
 /**
- * LibSQL store for agent memory
- * Path is relative to .mastra/output directory when running
+ * SurrealDB store for agent memory
+ * Connects using environment variables (SURREALDB_URL, etc.)
  */
-export const libsqlStore = new LibSQLStore({
-  url: 'file:../mastra.db',
-});
+export const surrealStore = new SurrealStore();
 
 /**
  * Memory instance for agent conversations
@@ -25,7 +23,7 @@ export const libsqlStore = new LibSQLStore({
  * - threads.generateTitle: Auto-generate thread titles using a model
  */
 export const memory = new Memory({
-  storage: libsqlStore,
+  storage: surrealStore,
   options: {
     lastMessages: 20,
     threads: {

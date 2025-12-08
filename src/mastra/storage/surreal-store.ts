@@ -1,98 +1,55 @@
 /**
  * SurrealDB Storage Adapter for Mastra
  *
- * Implements the MastraStorage interface using SurrealDB's multi-model capabilities.
+ * Extends MastraStorage to provide full compatibility with Mastra's storage interface.
+ * Leverages SurrealDB's multi-model capabilities (document, vector, graph).
  */
 
 import Surreal from 'surrealdb';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { MastraStorage } from '@mastra/core/storage';
+import type {
+  TABLE_NAMES,
+  StorageColumn,
+  StorageResourceType,
+  StorageGetMessagesArg,
+  StorageGetTracesArg,
+  StorageGetTracesPaginatedArg,
+  EvalRow,
+  PaginationInfo,
+  PaginationArgs,
+  StoragePagination,
+  WorkflowRun,
+  WorkflowRuns,
+  ThreadSortOptions,
+  AISpanRecord,
+  AITraceRecord,
+  AITracesPaginatedArg,
+  StorageDomains,
+} from '@mastra/core/storage';
+import type { StorageThreadType, MastraMessageV1 } from '@mastra/core/memory';
+import type { MastraMessageV2, MastraMessageContentV2 } from '@mastra/core/agent';
+import type { ScoreRowData, ScoringSource } from '@mastra/core/scores';
+import type { Trace } from '@mastra/core/telemetry';
+import type { StepResult, WorkflowRunState } from '@mastra/core/workflows';
 import { type SurrealDBConfig, loadConfigFromEnv } from './config';
 
-// Types matching Mastra's storage interface
-export interface Thread {
-  id: string;
-  resourceId: string;
-  title?: string;
-  metadata?: Record<string, unknown>;
-  createdAt: Date;
-  updatedAt: Date;
+export interface SurrealStoreConfig {
+  url?: string;
+  namespace?: string;
+  database?: string;
+  username?: string;
+  password?: string;
+  token?: string;
 }
 
-export interface Message {
-  id: string;
-  threadId: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string | unknown[];
-  toolCalls?: Record<string, unknown>[];
-  toolCallId?: string;
-  createdAt: Date;
-  embedding?: number[];
-}
-
-export interface WorkflowSnapshot {
-  id: string;
-  workflowId: string;
-  runId: string;
-  snapshot: Record<string, unknown>;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface Trace {
-  id: string;
-  traceId: string;
-  parentSpanId?: string;
-  name: string;
-  kind?: string;
-  status?: Record<string, unknown>;
-  attributes?: Record<string, unknown>;
-  events?: Record<string, unknown>[];
-  startTime: Date;
-  endTime?: Date;
-  createdAt: Date;
-}
-
-export interface EvalResult {
-  id: string;
-  name: string;
-  input: unknown;
-  output: unknown;
-  expected?: unknown;
-  score?: number;
-  metadata?: Record<string, unknown>;
-  createdAt: Date;
-}
-
-export interface ScorerResult {
-  id: string;
-  name: string;
-  score: number;
-  reasoning?: string;
-  metadata?: Record<string, unknown>;
-  createdAt: Date;
-}
-
-export interface Resource {
-  id: string;
-  resourceId: string;
-  key: string;
-  value: unknown;
-  metadata?: Record<string, unknown>;
-  createdAt: Date;
-  updatedAt: Date;
-  embedding?: number[];
-}
-
-/**
- * SurrealDB Storage Adapter
- */
-export class SurrealDBStore {
+export class SurrealStore extends MastraStorage {
   private db: Surreal;
   private config: SurrealDBConfig;
-  private initialized = false;
+  private isConnected = false;
+  declare stores: StorageDomains;
 
-  constructor(config?: Partial<SurrealDBConfig>) {
+  constructor(config?: SurrealStoreConfig) {
+    super({ name: 'SurrealStore' });
     this.db = new Surreal();
     this.config = {
       ...loadConfigFromEnv(),
@@ -100,11 +57,21 @@ export class SurrealDBStore {
     };
   }
 
-  /**
-   * Initialize connection and optionally apply schema
-   */
-  async init(applySchema = false): Promise<void> {
-    if (this.initialized) return;
+  get supports() {
+    return {
+      selectByIncludeResourceScope: true,
+      resourceWorkingMemory: true,
+      hasColumn: false,
+      createTable: true,
+      deleteMessages: true,
+      aiTracing: false, // TODO: implement
+      indexManagement: false, // TODO: implement
+      getScoresBySpan: false, // TODO: implement
+    };
+  }
+
+  async init(): Promise<void> {
+    if (this.isConnected) return;
 
     await this.db.connect(this.config.url);
 
@@ -122,326 +89,804 @@ export class SurrealDBStore {
       database: this.config.database,
     });
 
-    if (applySchema) {
-      await this.applySchema();
-    }
-
-    this.initialized = true;
+    this.isConnected = true;
   }
 
-  /**
-   * Apply the schema from schema.surql
-   */
-  async applySchema(): Promise<void> {
-    const schemaPath = join(import.meta.dir, 'schema.surql');
-    const schema = readFileSync(schemaPath, 'utf-8');
-    await this.db.query(schema);
-  }
-
-  /**
-   * Close the connection
-   */
   async close(): Promise<void> {
     await this.db.close();
-    this.initialized = false;
-  }
-
-  /**
-   * Get raw database instance for advanced queries
-   */
-  get database(): Surreal {
-    return this.db;
+    this.isConnected = false;
   }
 
   // ============================================
-  // THREADS
+  // TABLE OPERATIONS
   // ============================================
 
-  async createThread(thread: Omit<Thread, 'createdAt' | 'updatedAt'>): Promise<Thread> {
-    const now = new Date();
-    const [result] = await this.db.create('mastra_threads', {
-      ...thread,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return result as Thread;
+  async createTable({
+    tableName,
+    schema,
+  }: {
+    tableName: TABLE_NAMES;
+    schema: Record<string, StorageColumn>;
+  }): Promise<void> {
+    await this.init();
+    // SurrealDB is schemaless by default, but we can define schema if needed
+    await this.db.query(`DEFINE TABLE ${tableName} SCHEMALESS PERMISSIONS FULL`);
   }
 
-  async getThread(id: string): Promise<Thread | null> {
-    const results = await this.db.query<[Thread[]]>(
-      'SELECT * FROM mastra_threads WHERE id = $id LIMIT 1',
-      { id }
+  async clearTable({ tableName }: { tableName: TABLE_NAMES }): Promise<void> {
+    await this.init();
+    await this.db.query(`DELETE FROM ${tableName}`);
+  }
+
+  async dropTable({ tableName }: { tableName: TABLE_NAMES }): Promise<void> {
+    await this.init();
+    await this.db.query(`REMOVE TABLE ${tableName}`);
+  }
+
+  async alterTable({
+    tableName,
+    schema,
+    ifNotExists,
+  }: {
+    tableName: TABLE_NAMES;
+    schema: Record<string, StorageColumn>;
+    ifNotExists: string[];
+  }): Promise<void> {
+    // SurrealDB is schemaless, no need for ALTER TABLE
+    await this.init();
+  }
+
+  async insert({
+    tableName,
+    record,
+  }: {
+    tableName: TABLE_NAMES;
+    record: Record<string, any>;
+  }): Promise<void> {
+    await this.init();
+    await this.db.create(tableName, record);
+  }
+
+  async batchInsert({
+    tableName,
+    records,
+  }: {
+    tableName: TABLE_NAMES;
+    records: Record<string, any>[];
+  }): Promise<void> {
+    await this.init();
+    for (const record of records) {
+      await this.db.create(tableName, record);
+    }
+  }
+
+  async load<R>({
+    tableName,
+    keys,
+  }: {
+    tableName: TABLE_NAMES;
+    keys: Record<string, any>;
+  }): Promise<R | null> {
+    await this.init();
+    const whereClauses = Object.entries(keys)
+      .map(([k, v]) => `${k} = $${k}`)
+      .join(' AND ');
+    const results = await this.db.query<[R[]]>(
+      `SELECT * FROM ${tableName} WHERE ${whereClauses} LIMIT 1`,
+      keys
     );
     return results[0]?.[0] || null;
   }
 
-  async getThreadsByResource(resourceId: string): Promise<Thread[]> {
-    const results = await this.db.query<[Thread[]]>(
-      'SELECT * FROM mastra_threads WHERE resourceId = $resourceId ORDER BY createdAt DESC',
+  // ============================================
+  // THREADS (Memory)
+  // ============================================
+
+  async getThreadById({
+    threadId,
+  }: {
+    threadId: string;
+  }): Promise<StorageThreadType | null> {
+    await this.init();
+    const results = await this.db.query<[StorageThreadType[]]>(
+      'SELECT * FROM mastra_threads WHERE id = $threadId LIMIT 1',
+      { threadId }
+    );
+    const thread = results[0]?.[0];
+    if (!thread) return null;
+    return {
+      ...thread,
+      createdAt: this.ensureDate(thread.createdAt) || new Date(),
+      updatedAt: this.ensureDate(thread.updatedAt) || new Date(),
+    };
+  }
+
+  async getThreadsByResourceId(
+    args: { resourceId: string } & ThreadSortOptions
+  ): Promise<StorageThreadType[]> {
+    await this.init();
+    const { resourceId, orderBy = 'createdAt', sortDirection = 'desc' } = args;
+    const results = await this.db.query<[StorageThreadType[]]>(
+      `SELECT * FROM mastra_threads WHERE resourceId = $resourceId ORDER BY ${orderBy} ${sortDirection.toUpperCase()}`,
       { resourceId }
     );
-    return results[0] || [];
+    return (results[0] || []).map((t) => ({
+      ...t,
+      createdAt: this.ensureDate(t.createdAt) || new Date(),
+      updatedAt: this.ensureDate(t.updatedAt) || new Date(),
+    }));
   }
 
-  async updateThread(id: string, updates: Partial<Thread>): Promise<Thread | null> {
-    const results = await this.db.query<[Thread[]]>(
-      `UPDATE mastra_threads SET ${Object.keys(updates).map(k => `${k} = $${k}`).join(', ')}, updatedAt = time::now() WHERE id = $id RETURN AFTER`,
-      { id, ...updates }
+  async getThreadsByResourceIdPaginated(
+    args: { resourceId: string; page: number; perPage: number } & ThreadSortOptions
+  ): Promise<PaginationInfo & { threads: StorageThreadType[] }> {
+    await this.init();
+    const { resourceId, page, perPage, orderBy = 'createdAt', sortDirection = 'desc' } = args;
+    const offset = (page - 1) * perPage;
+
+    // Get total count
+    const countResults = await this.db.query<[{ count: number }[]]>(
+      'SELECT count() as count FROM mastra_threads WHERE resourceId = $resourceId GROUP ALL',
+      { resourceId }
     );
-    return results[0]?.[0] || null;
+    const total = countResults[0]?.[0]?.count || 0;
+
+    // Get paginated results
+    const results = await this.db.query<[StorageThreadType[]]>(
+      `SELECT * FROM mastra_threads WHERE resourceId = $resourceId ORDER BY ${orderBy} ${sortDirection.toUpperCase()} LIMIT $limit START $offset`,
+      { resourceId, limit: perPage, offset }
+    );
+
+    const threads = (results[0] || []).map((t) => ({
+      ...t,
+      createdAt: this.ensureDate(t.createdAt) || new Date(),
+      updatedAt: this.ensureDate(t.updatedAt) || new Date(),
+    }));
+
+    return {
+      threads,
+      page,
+      perPage,
+      total,
+      hasMore: offset + threads.length < total,
+    };
   }
 
-  async deleteThread(id: string): Promise<boolean> {
-    await this.db.query('DELETE FROM mastra_threads WHERE id = $id', { id });
-    return true;
+  async saveThread({
+    thread,
+  }: {
+    thread: StorageThreadType;
+  }): Promise<StorageThreadType> {
+    await this.init();
+    const now = new Date();
+    const toSave = {
+      ...thread,
+      createdAt: thread.createdAt || now,
+      updatedAt: now,
+    };
+
+    await this.db.query(
+      `INSERT INTO mastra_threads {
+        id: $id,
+        resourceId: $resourceId,
+        title: $title,
+        metadata: $metadata,
+        createdAt: $createdAt,
+        updatedAt: $updatedAt
+      } ON DUPLICATE KEY UPDATE
+        title = $title,
+        metadata = $metadata,
+        updatedAt = time::now()`,
+      toSave
+    );
+
+    return toSave;
+  }
+
+  async updateThread({
+    id,
+    title,
+    metadata,
+  }: {
+    id: string;
+    title: string;
+    metadata: Record<string, unknown>;
+  }): Promise<StorageThreadType> {
+    await this.init();
+    const results = await this.db.query<[StorageThreadType[]]>(
+      `UPDATE mastra_threads SET title = $title, metadata = $metadata, updatedAt = time::now() WHERE id = $id RETURN AFTER`,
+      { id, title, metadata }
+    );
+    const thread = results[0]?.[0];
+    if (!thread) throw new Error(`Thread ${id} not found`);
+    return {
+      ...thread,
+      createdAt: this.ensureDate(thread.createdAt) || new Date(),
+      updatedAt: this.ensureDate(thread.updatedAt) || new Date(),
+    };
+  }
+
+  async deleteThread({ threadId }: { threadId: string }): Promise<void> {
+    await this.init();
+    // Delete messages first
+    await this.db.query('DELETE FROM mastra_messages WHERE threadId = $threadId', { threadId });
+    // Delete thread
+    await this.db.query('DELETE FROM mastra_threads WHERE id = $threadId', { threadId });
   }
 
   // ============================================
-  // MESSAGES
+  // MESSAGES (Memory)
   // ============================================
 
-  async addMessage(message: Omit<Message, 'createdAt'>): Promise<Message> {
-    const [result] = await this.db.create('mastra_messages', {
-      ...message,
-      createdAt: new Date(),
-    });
-    return result as Message;
-  }
+  async getMessages(args: StorageGetMessagesArg & { format?: 'v1' }): Promise<MastraMessageV1[]>;
+  async getMessages(args: StorageGetMessagesArg & { format: 'v2' }): Promise<MastraMessageV2[]>;
+  async getMessages(
+    args: StorageGetMessagesArg & { format?: 'v1' | 'v2' }
+  ): Promise<MastraMessageV1[] | MastraMessageV2[]> {
+    await this.init();
+    const { threadId, selectBy, format = 'v1' } = args;
+    const limit = this.resolveMessageLimit({ last: selectBy?.last, defaultLimit: 100 });
 
-  async getMessages(threadId: string, limit = 100): Promise<Message[]> {
-    const results = await this.db.query<[Message[]]>(
+    const results = await this.db.query<[any[]]>(
       'SELECT * FROM mastra_messages WHERE threadId = $threadId ORDER BY createdAt ASC LIMIT $limit',
       { threadId, limit }
     );
-    return results[0] || [];
+
+    const messages = results[0] || [];
+    return messages.map((m) => ({
+      ...m,
+      createdAt: this.ensureDate(m.createdAt) || new Date(),
+    }));
   }
 
-  async getMessageById(id: string): Promise<Message | null> {
-    const results = await this.db.query<[Message[]]>(
-      'SELECT * FROM mastra_messages WHERE id = $id LIMIT 1',
-      { id }
+  async getMessagesById(args: { messageIds: string[]; format: 'v1' }): Promise<MastraMessageV1[]>;
+  async getMessagesById(args: { messageIds: string[]; format?: 'v2' }): Promise<MastraMessageV2[]>;
+  async getMessagesById({
+    messageIds,
+    format = 'v1',
+  }: {
+    messageIds: string[];
+    format?: 'v1' | 'v2';
+  }): Promise<MastraMessageV1[] | MastraMessageV2[]> {
+    await this.init();
+    const results = await this.db.query<[any[]]>(
+      'SELECT * FROM mastra_messages WHERE id IN $messageIds',
+      { messageIds }
     );
-    return results[0]?.[0] || null;
+    return (results[0] || []).map((m) => ({
+      ...m,
+      createdAt: this.ensureDate(m.createdAt) || new Date(),
+    }));
   }
 
-  async getMessagesById(ids: string[]): Promise<Message[]> {
-    const results = await this.db.query<[Message[]]>(
-      'SELECT * FROM mastra_messages WHERE id IN $ids',
-      { ids }
-    );
-    return results[0] || [];
+  async getMessagesPaginated(
+    args: StorageGetMessagesArg & { format?: 'v1' | 'v2' }
+  ): Promise<PaginationInfo & { messages: MastraMessageV1[] | MastraMessageV2[] }> {
+    const messages = await this.getMessages({ ...args, format: args.format || 'v1' } as StorageGetMessagesArg & { format: 'v1' });
+    return {
+      messages,
+      page: 1,
+      perPage: messages.length,
+      total: messages.length,
+      hasMore: false,
+    };
   }
 
-  async deleteMessage(id: string): Promise<boolean> {
-    await this.db.query('DELETE FROM mastra_messages WHERE id = $id', { id });
-    return true;
+  async saveMessages(args: { messages: MastraMessageV1[]; format?: 'v1' }): Promise<MastraMessageV1[]>;
+  async saveMessages(args: { messages: MastraMessageV2[]; format: 'v2' }): Promise<MastraMessageV2[]>;
+  async saveMessages(
+    args: { messages: MastraMessageV1[]; format?: 'v1' } | { messages: MastraMessageV2[]; format: 'v2' }
+  ): Promise<MastraMessageV1[] | MastraMessageV2[]> {
+    await this.init();
+    const { messages } = args;
+    const saved: any[] = [];
+
+    for (const msg of messages) {
+      const toSave = {
+        ...msg,
+        createdAt: (msg as any).createdAt || new Date(),
+      };
+      await this.db.create('mastra_messages', toSave);
+      saved.push(toSave);
+    }
+
+    return saved;
   }
 
-  async deleteMessagesByThread(threadId: string): Promise<boolean> {
-    await this.db.query('DELETE FROM mastra_messages WHERE threadId = $threadId', { threadId });
-    return true;
-  }
+  async updateMessages({
+    messages,
+  }: {
+    messages: (Partial<Omit<MastraMessageV2, 'createdAt'>> & {
+      id: string;
+      content?: { metadata?: MastraMessageContentV2['metadata']; content?: MastraMessageContentV2['content'] };
+    })[];
+  }): Promise<MastraMessageV2[]> {
+    await this.init();
+    const updated: MastraMessageV2[] = [];
 
-  // ============================================
-  // WORKFLOW SNAPSHOTS
-  // ============================================
-
-  async saveWorkflowSnapshot(snapshot: Omit<WorkflowSnapshot, 'createdAt' | 'updatedAt'>): Promise<WorkflowSnapshot> {
-    const now = new Date();
-    // Upsert based on workflowId + runId
-    const results = await this.db.query<[WorkflowSnapshot[]]>(
-      `INSERT INTO mastra_workflow_snapshot $data ON DUPLICATE KEY UPDATE snapshot = $data.snapshot, updatedAt = time::now()`,
-      {
-        data: {
-          ...snapshot,
-          createdAt: now,
-          updatedAt: now,
-        }
+    for (const msg of messages) {
+      const results = await this.db.query<[MastraMessageV2[]]>(
+        `UPDATE mastra_messages SET content = $content WHERE id = $id RETURN AFTER`,
+        { id: msg.id, content: msg.content }
+      );
+      if (results[0]?.[0]) {
+        updated.push(results[0][0]);
       }
-    );
-    return results[0]?.[0] || snapshot as WorkflowSnapshot;
+    }
+
+    return updated;
   }
 
-  async getWorkflowSnapshot(workflowId: string, runId: string): Promise<WorkflowSnapshot | null> {
-    const results = await this.db.query<[WorkflowSnapshot[]]>(
-      'SELECT * FROM mastra_workflow_snapshot WHERE workflowId = $workflowId AND runId = $runId LIMIT 1',
-      { workflowId, runId }
-    );
-    return results[0]?.[0] || null;
-  }
-
-  async deleteWorkflowSnapshot(workflowId: string, runId: string): Promise<boolean> {
-    await this.db.query(
-      'DELETE FROM mastra_workflow_snapshot WHERE workflowId = $workflowId AND runId = $runId',
-      { workflowId, runId }
-    );
-    return true;
-  }
-
-  // ============================================
-  // TRACES
-  // ============================================
-
-  async saveTrace(trace: Omit<Trace, 'createdAt'>): Promise<Trace> {
-    const [result] = await this.db.create('mastra_traces', {
-      ...trace,
-      createdAt: new Date(),
-    });
-    return result as Trace;
-  }
-
-  async getTraces(traceId: string): Promise<Trace[]> {
-    const results = await this.db.query<[Trace[]]>(
-      'SELECT * FROM mastra_traces WHERE traceId = $traceId ORDER BY startTime ASC',
-      { traceId }
-    );
-    return results[0] || [];
-  }
-
-  async getTracesByName(name: string, limit = 100): Promise<Trace[]> {
-    const results = await this.db.query<[Trace[]]>(
-      'SELECT * FROM mastra_traces WHERE name = $name ORDER BY createdAt DESC LIMIT $limit',
-      { name, limit }
-    );
-    return results[0] || [];
-  }
-
-  // ============================================
-  // EVALS
-  // ============================================
-
-  async saveEval(evalResult: Omit<EvalResult, 'createdAt'>): Promise<EvalResult> {
-    const [result] = await this.db.create('mastra_evals', {
-      ...evalResult,
-      createdAt: new Date(),
-    });
-    return result as EvalResult;
-  }
-
-  async getEvals(name: string, limit = 100): Promise<EvalResult[]> {
-    const results = await this.db.query<[EvalResult[]]>(
-      'SELECT * FROM mastra_evals WHERE name = $name ORDER BY createdAt DESC LIMIT $limit',
-      { name, limit }
-    );
-    return results[0] || [];
-  }
-
-  // ============================================
-  // SCORERS
-  // ============================================
-
-  async saveScorer(scorer: Omit<ScorerResult, 'createdAt'>): Promise<ScorerResult> {
-    const [result] = await this.db.create('mastra_scorers', {
-      ...scorer,
-      createdAt: new Date(),
-    });
-    return result as ScorerResult;
-  }
-
-  async getScorers(name: string, limit = 100): Promise<ScorerResult[]> {
-    const results = await this.db.query<[ScorerResult[]]>(
-      'SELECT * FROM mastra_scorers WHERE name = $name ORDER BY createdAt DESC LIMIT $limit',
-      { name, limit }
-    );
-    return results[0] || [];
+  async deleteMessages(messageIds: string[]): Promise<void> {
+    await this.init();
+    await this.db.query('DELETE FROM mastra_messages WHERE id IN $messageIds', { messageIds });
   }
 
   // ============================================
   // RESOURCES (Working Memory)
   // ============================================
 
-  async setResource(resource: Omit<Resource, 'createdAt' | 'updatedAt'>): Promise<Resource> {
-    const now = new Date();
-    // Upsert based on resourceId + key
-    const results = await this.db.query<[Resource[]]>(
-      `INSERT INTO mastra_resources {
-        id: $id,
-        resourceId: $resourceId,
-        key: $key,
-        value: $value,
-        metadata: $metadata,
-        embedding: $embedding,
-        createdAt: $now,
-        updatedAt: $now
-      } ON DUPLICATE KEY UPDATE value = $value, metadata = $metadata, embedding = $embedding, updatedAt = time::now()`,
-      { ...resource, now }
-    );
-    return results[0]?.[0] || resource as Resource;
-  }
-
-  async getResource(resourceId: string, key: string): Promise<Resource | null> {
-    const results = await this.db.query<[Resource[]]>(
-      'SELECT * FROM mastra_resources WHERE resourceId = $resourceId AND key = $key LIMIT 1',
-      { resourceId, key }
+  async getResourceById({
+    resourceId,
+  }: {
+    resourceId: string;
+  }): Promise<StorageResourceType | null> {
+    await this.init();
+    const results = await this.db.query<[StorageResourceType[]]>(
+      'SELECT * FROM mastra_resources WHERE resourceId = $resourceId LIMIT 1',
+      { resourceId }
     );
     return results[0]?.[0] || null;
   }
 
-  async getResourcesByResourceId(resourceId: string): Promise<Resource[]> {
-    const results = await this.db.query<[Resource[]]>(
-      'SELECT * FROM mastra_resources WHERE resourceId = $resourceId ORDER BY key ASC',
-      { resourceId }
-    );
-    return results[0] || [];
-  }
+  async saveResource({
+    resource,
+  }: {
+    resource: StorageResourceType;
+  }): Promise<StorageResourceType> {
+    await this.init();
+    const now = new Date();
+    const toSave = {
+      ...resource,
+      createdAt: resource.createdAt || now,
+      updatedAt: now,
+    };
 
-  async deleteResource(resourceId: string, key: string): Promise<boolean> {
     await this.db.query(
-      'DELETE FROM mastra_resources WHERE resourceId = $resourceId AND key = $key',
-      { resourceId, key }
+      `INSERT INTO mastra_resources {
+        resourceId: $resourceId,
+        workingMemory: $workingMemory,
+        metadata: $metadata,
+        createdAt: $createdAt,
+        updatedAt: $updatedAt
+      } ON DUPLICATE KEY UPDATE
+        workingMemory = $workingMemory,
+        metadata = $metadata,
+        updatedAt = time::now()`,
+      toSave
     );
-    return true;
+
+    return toSave;
+  }
+
+  async updateResource({
+    resourceId,
+    workingMemory,
+    metadata,
+  }: {
+    resourceId: string;
+    workingMemory?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<StorageResourceType> {
+    await this.init();
+    const updates: string[] = [];
+    const params: Record<string, any> = { resourceId };
+
+    if (workingMemory !== undefined) {
+      updates.push('workingMemory = $workingMemory');
+      params.workingMemory = workingMemory;
+    }
+    if (metadata !== undefined) {
+      updates.push('metadata = $metadata');
+      params.metadata = metadata;
+    }
+    updates.push('updatedAt = time::now()');
+
+    const results = await this.db.query<[StorageResourceType[]]>(
+      `UPDATE mastra_resources SET ${updates.join(', ')} WHERE resourceId = $resourceId RETURN AFTER`,
+      params
+    );
+
+    const resource = results[0]?.[0];
+    if (!resource) throw new Error(`Resource ${resourceId} not found`);
+    return resource;
   }
 
   // ============================================
-  // VECTOR SEARCH (Semantic Memory)
+  // WORKFLOWS
   // ============================================
 
-  /**
-   * Search messages by embedding similarity
-   * Requires HNSW index to be enabled in schema
-   */
-  async searchMessagesByEmbedding(
-    embedding: number[],
-    limit = 10,
-    threadId?: string
-  ): Promise<(Message & { similarity: number })[]> {
-    const whereClause = threadId
-      ? 'WHERE threadId = $threadId AND embedding <|$limit|> $embedding'
-      : 'WHERE embedding <|$limit|> $embedding';
+  async updateWorkflowResults({
+    workflowName,
+    runId,
+    stepId,
+    result,
+    runtimeContext,
+  }: {
+    workflowName: string;
+    runId: string;
+    stepId: string;
+    result: StepResult<any, any, any, any>;
+    runtimeContext: Record<string, any>;
+  }): Promise<Record<string, StepResult<any, any, any, any>>> {
+    await this.init();
+    // Load existing snapshot and update the step result
+    const snapshot = await this.loadWorkflowSnapshot({ workflowName, runId });
+    const stepResults: Record<string, StepResult<any, any, any, any>> = {};
+    stepResults[stepId] = result;
 
-    const results = await this.db.query<[(Message & { similarity: number })[]]>(
-      `SELECT *, vector::similarity::cosine(embedding, $embedding) AS similarity
-       FROM mastra_messages
-       ${whereClause}
-       ORDER BY similarity DESC`,
-      { embedding, limit, threadId }
+    // Update snapshot with the new step result
+    await this.db.query(
+      `UPDATE mastra_workflow_snapshot SET result = $result, updatedAt = time::now() WHERE workflowName = $workflowName AND runId = $runId`,
+      { workflowName, runId, result: stepResults }
     );
+
+    return stepResults;
+  }
+
+  async updateWorkflowState({
+    workflowName,
+    runId,
+    opts,
+  }: {
+    workflowName: string;
+    runId: string;
+    opts: {
+      status: string;
+      result?: StepResult<any, any, any, any>;
+      error?: string;
+      suspendedPaths?: Record<string, number[]>;
+      waitingPaths?: Record<string, number[]>;
+    };
+  }): Promise<WorkflowRunState | undefined> {
+    await this.init();
+    const results = await this.db.query<[WorkflowRunState[]]>(
+      `UPDATE mastra_workflow_snapshot SET
+        status = $status,
+        error = $error,
+        suspendedPaths = $suspendedPaths,
+        waitingPaths = $waitingPaths,
+        updatedAt = time::now()
+      WHERE workflowName = $workflowName AND runId = $runId RETURN AFTER`,
+      { workflowName, runId, ...opts }
+    );
+    return results[0]?.[0];
+  }
+
+  async persistWorkflowSnapshot({
+    workflowName,
+    runId,
+    resourceId,
+    snapshot,
+  }: {
+    workflowName: string;
+    runId: string;
+    resourceId?: string;
+    snapshot: WorkflowRunState;
+  }): Promise<void> {
+    await this.init();
+    const now = new Date();
+    await this.db.query(
+      `INSERT INTO mastra_workflow_snapshot {
+        workflowName: $workflowName,
+        runId: $runId,
+        resourceId: $resourceId,
+        snapshot: $snapshot,
+        status: $status,
+        createdAt: $now,
+        updatedAt: $now
+      } ON DUPLICATE KEY UPDATE
+        snapshot = $snapshot,
+        status = $status,
+        updatedAt = time::now()`,
+      { workflowName, runId, resourceId, snapshot, status: snapshot.status, now }
+    );
+  }
+
+  async loadWorkflowSnapshot({
+    workflowName,
+    runId,
+  }: {
+    workflowName: string;
+    runId: string;
+  }): Promise<WorkflowRunState | null> {
+    await this.init();
+    const results = await this.db.query<[{ snapshot: WorkflowRunState }[]]>(
+      'SELECT snapshot FROM mastra_workflow_snapshot WHERE workflowName = $workflowName AND runId = $runId LIMIT 1',
+      { workflowName, runId }
+    );
+    return results[0]?.[0]?.snapshot || null;
+  }
+
+  async getWorkflowRuns(args?: {
+    workflowName?: string;
+    fromDate?: Date;
+    toDate?: Date;
+    limit?: number;
+    offset?: number;
+    resourceId?: string;
+  }): Promise<WorkflowRuns> {
+    await this.init();
+    const { workflowName, fromDate, toDate, limit = 100, offset = 0, resourceId } = args || {};
+
+    let query = 'SELECT * FROM mastra_workflow_snapshot WHERE 1=1';
+    const params: Record<string, any> = { limit, offset };
+
+    if (workflowName) {
+      query += ' AND workflowName = $workflowName';
+      params.workflowName = workflowName;
+    }
+    if (resourceId) {
+      query += ' AND resourceId = $resourceId';
+      params.resourceId = resourceId;
+    }
+    if (fromDate) {
+      query += ' AND createdAt >= $fromDate';
+      params.fromDate = fromDate;
+    }
+    if (toDate) {
+      query += ' AND createdAt <= $toDate';
+      params.toDate = toDate;
+    }
+
+    query += ' ORDER BY createdAt DESC LIMIT $limit START $offset';
+
+    const results = await this.db.query<[WorkflowRun[]]>(query, params);
+    const runs = results[0] || [];
+    return { runs, total: runs.length };
+  }
+
+  async getWorkflowRunById({
+    runId,
+    workflowName,
+  }: {
+    runId: string;
+    workflowName?: string;
+  }): Promise<WorkflowRun | null> {
+    await this.init();
+    let query = 'SELECT * FROM mastra_workflow_snapshot WHERE runId = $runId';
+    const params: Record<string, any> = { runId };
+
+    if (workflowName) {
+      query += ' AND workflowName = $workflowName';
+      params.workflowName = workflowName;
+    }
+    query += ' LIMIT 1';
+
+    const results = await this.db.query<[WorkflowRun[]]>(query, params);
+    return results[0]?.[0] || null;
+  }
+
+  // ============================================
+  // TRACES
+  // ============================================
+
+  async getTraces(args: StorageGetTracesArg): Promise<Trace[]> {
+    await this.init();
+    const { name, scope, page = 1, perPage = 100 } = args;
+    const offset = (page - 1) * perPage;
+
+    let query = 'SELECT * FROM mastra_traces WHERE 1=1';
+    const params: Record<string, any> = { limit: perPage, offset };
+
+    if (name) {
+      query += ' AND name = $name';
+      params.name = name;
+    }
+    if (scope) {
+      query += ' AND scope = $scope';
+      params.scope = scope;
+    }
+
+    query += ' ORDER BY createdAt DESC LIMIT $limit START $offset';
+
+    const results = await this.db.query<[Trace[]]>(query, params);
     return results[0] || [];
   }
 
-  /**
-   * Search resources by embedding similarity
-   * Requires HNSW index to be enabled in schema
-   */
-  async searchResourcesByEmbedding(
-    embedding: number[],
-    limit = 10,
-    resourceId?: string
-  ): Promise<(Resource & { similarity: number })[]> {
-    const whereClause = resourceId
-      ? 'WHERE resourceId = $resourceId AND embedding <|$limit|> $embedding'
-      : 'WHERE embedding <|$limit|> $embedding';
+  async getTracesPaginated(
+    args: StorageGetTracesPaginatedArg
+  ): Promise<PaginationInfo & { traces: Trace[] }> {
+    const page = args.page ?? 1;
+    const perPage = args.perPage ?? 100;
+    const traces = await this.getTraces({ ...args, page, perPage });
+    return {
+      traces,
+      page,
+      perPage,
+      total: traces.length,
+      hasMore: traces.length === perPage,
+    };
+  }
 
-    const results = await this.db.query<[(Resource & { similarity: number })[]]>(
-      `SELECT *, vector::similarity::cosine(embedding, $embedding) AS similarity
-       FROM mastra_resources
-       ${whereClause}
-       ORDER BY similarity DESC`,
-      { embedding, limit, resourceId }
-    );
+  async batchTraceInsert({ records }: { records: Record<string, any>[] }): Promise<void> {
+    await this.init();
+    for (const record of records) {
+      await this.db.create('mastra_traces', {
+        ...record,
+        createdAt: new Date(),
+      });
+    }
+  }
+
+  // ============================================
+  // EVALS
+  // ============================================
+
+  async getEvalsByAgentName(agentName: string, type?: 'test' | 'live'): Promise<EvalRow[]> {
+    await this.init();
+    let query = 'SELECT * FROM mastra_evals WHERE agentName = $agentName';
+    const params: Record<string, any> = { agentName };
+
+    if (type) {
+      query += ' AND type = $type';
+      params.type = type;
+    }
+
+    query += ' ORDER BY createdAt DESC';
+
+    const results = await this.db.query<[EvalRow[]]>(query, params);
     return results[0] || [];
+  }
+
+  async getEvals(
+    options?: { agentName?: string; type?: 'test' | 'live' } & PaginationArgs
+  ): Promise<PaginationInfo & { evals: EvalRow[] }> {
+    await this.init();
+    const { agentName, type, page = 1, perPage = 100 } = options || {};
+    const offset = (page - 1) * perPage;
+
+    let query = 'SELECT * FROM mastra_evals WHERE 1=1';
+    const params: Record<string, any> = { limit: perPage, offset };
+
+    if (agentName) {
+      query += ' AND agentName = $agentName';
+      params.agentName = agentName;
+    }
+    if (type) {
+      query += ' AND type = $type';
+      params.type = type;
+    }
+
+    query += ' ORDER BY createdAt DESC LIMIT $limit START $offset';
+
+    const results = await this.db.query<[EvalRow[]]>(query, params);
+    const evals = results[0] || [];
+
+    return {
+      evals,
+      page,
+      perPage,
+      total: evals.length,
+      hasMore: evals.length === perPage,
+    };
+  }
+
+  // ============================================
+  // SCORES
+  // ============================================
+
+  async getScoreById({ id }: { id: string }): Promise<ScoreRowData | null> {
+    await this.init();
+    const results = await this.db.query<[ScoreRowData[]]>(
+      'SELECT * FROM mastra_scores WHERE id = $id LIMIT 1',
+      { id }
+    );
+    return results[0]?.[0] || null;
+  }
+
+  async saveScore(score: ScoreRowData): Promise<{ score: ScoreRowData }> {
+    await this.init();
+    const toSave = {
+      ...score,
+      createdAt: score.createdAt || new Date(),
+      updatedAt: new Date(),
+    };
+    await this.db.create('mastra_scores', toSave);
+    return { score: toSave };
+  }
+
+  async getScoresByScorerId({
+    scorerId,
+    pagination,
+    entityId,
+    entityType,
+    source,
+  }: {
+    scorerId: string;
+    pagination: StoragePagination;
+    entityId?: string;
+    entityType?: string;
+    source?: ScoringSource;
+  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
+    await this.init();
+    const { page = 1, perPage = 100 } = pagination;
+    const offset = (page - 1) * perPage;
+
+    let query = 'SELECT * FROM mastra_scores WHERE scorerId = $scorerId';
+    const params: Record<string, any> = { scorerId, limit: perPage, offset };
+
+    if (entityId) {
+      query += ' AND entityId = $entityId';
+      params.entityId = entityId;
+    }
+    if (entityType) {
+      query += ' AND entityType = $entityType';
+      params.entityType = entityType;
+    }
+    if (source) {
+      query += ' AND source = $source';
+      params.source = source;
+    }
+
+    query += ' ORDER BY createdAt DESC LIMIT $limit START $offset';
+
+    const results = await this.db.query<[ScoreRowData[]]>(query, params);
+    const scores = results[0] || [];
+
+    return {
+      pagination: { page, perPage, total: scores.length, hasMore: scores.length === perPage },
+      scores,
+    };
+  }
+
+  async getScoresByRunId({
+    runId,
+    pagination,
+  }: {
+    runId: string;
+    pagination: StoragePagination;
+  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
+    await this.init();
+    const { page = 1, perPage = 100 } = pagination;
+    const offset = (page - 1) * perPage;
+
+    const results = await this.db.query<[ScoreRowData[]]>(
+      'SELECT * FROM mastra_scores WHERE runId = $runId ORDER BY createdAt DESC LIMIT $limit START $offset',
+      { runId, limit: perPage, offset }
+    );
+    const scores = results[0] || [];
+
+    return {
+      pagination: { page, perPage, total: scores.length, hasMore: scores.length === perPage },
+      scores,
+    };
+  }
+
+  async getScoresByEntityId({
+    entityId,
+    entityType,
+    pagination,
+  }: {
+    entityId: string;
+    entityType: string;
+    pagination: StoragePagination;
+  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
+    await this.init();
+    const { page = 1, perPage = 100 } = pagination;
+    const offset = (page - 1) * perPage;
+
+    const results = await this.db.query<[ScoreRowData[]]>(
+      'SELECT * FROM mastra_scores WHERE entityId = $entityId AND entityType = $entityType ORDER BY createdAt DESC LIMIT $limit START $offset',
+      { entityId, entityType, limit: perPage, offset }
+    );
+    const scores = results[0] || [];
+
+    return {
+      pagination: { page, perPage, total: scores.length, hasMore: scores.length === perPage },
+      scores,
+    };
   }
 }
 
-export default SurrealDBStore;
+export default SurrealStore;
