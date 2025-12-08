@@ -1,0 +1,20 @@
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v2.2
+    container_name: mastra-surrealdb
+    ports:
+      - "8000:8000"
+    volumes:
+      - surrealdb-data:/data
+    command: start --user root --pass root file:/data/mastra.db
+    environment:
+      - SURREAL_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  surrealdb-data:
+    driver: local

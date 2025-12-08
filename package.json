@@ -1,0 +1,30 @@
+{
+  "name": "mastra-agent-surreal-starter",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Production-ready Mastra agent starter with SurrealDB storage - document, vector, and graph capabilities",
+  "license": "MIT",
+  "scripts": {
+    "dev": "mastra dev",
+    "build": "mastra build",
+    "start": "mastra start",
+    "db:setup": "bun run scripts/setup-db.ts",
+    "db:reset": "bash scripts/reset-db.sh"
+  },
+  "dependencies": {
+    "@mastra/core": "^0.22.2",
+    "@mastra/memory": "^0.15.8",
+    "@mastra/loggers": "^0.10.17",
+    "@mastra/evals": "^0.14.1",
+    "surrealdb": "^1.0.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.1",
+    "mastra": "^0.17.3",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}
