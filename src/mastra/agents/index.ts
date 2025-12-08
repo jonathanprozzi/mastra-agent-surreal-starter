@@ -1,3 +1,4 @@
+import { anthropic } from '@ai-sdk/anthropic';
 import { Agent } from '@mastra/core/agent';
 import { tools } from '../tools';
 
@@ -14,10 +15,7 @@ You have access to tools that can help you:
 - Echo messages back
 
 Be concise and helpful in your responses.`,
-  model: {
-    provider: 'ANTHROPIC',
-    name: 'claude-sonnet-4-20250514',
-  },
+  model: anthropic('claude-sonnet-4-20250514'),
   tools: {
     getTimestamp: tools.getTimestamp,
     echo: tools.echo,
