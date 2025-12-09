@@ -162,6 +162,12 @@ export class MemorySurreal {
     const { threadId, selectBy, format = 'v1' } = args;
     const limit = resolveMessageLimit({ last: selectBy?.last, defaultLimit: 100 });
 
+    // Handle selectBy.include for cross-thread semantic recall
+    // This is used when vector search returns messages from multiple threads
+    if (selectBy?.include && selectBy.include.length > 0) {
+      return this.getMessagesWithContext(selectBy.include);
+    }
+
     const results = await this.db.query<[any[]]>(
       'SELECT * FROM mastra_messages WHERE threadId = $threadId ORDER BY createdAt ASC LIMIT $limit',
       { threadId, limit }
@@ -174,6 +180,108 @@ export class MemorySurreal {
       threadId: m.threadId,
       createdAt: ensureDate(m.createdAt) || new Date(),
     }));
+  }
+
+  /**
+   * Get messages with surrounding context for semantic recall.
+   * Supports cross-thread retrieval by fetching from each message's original thread.
+   */
+  private async getMessagesWithContext(
+    includes: {
+      id: string;
+      threadId?: string;
+      withPreviousMessages?: number;
+      withNextMessages?: number;
+    }[]
+  ): Promise<any[]> {
+    const allMessages: any[] = [];
+    const seenIds = new Set<string>();
+
+    for (const include of includes) {
+      const { id, threadId, withPreviousMessages = 0, withNextMessages = 0 } = include;
+
+      if (!threadId) {
+        // If no threadId, just fetch the message directly using type::thing for record ID
+        const results = await this.db.query<[any[]]>(
+          'SELECT * FROM type::thing("mastra_messages", $id)',
+          { id }
+        );
+        const msg = results[0]?.[0];
+        if (msg && !seenIds.has(normalizeId(msg.id))) {
+          seenIds.add(normalizeId(msg.id));
+          allMessages.push({
+            ...msg,
+            id: normalizeId(msg.id),
+            createdAt: ensureDate(msg.createdAt) || new Date(),
+          });
+        }
+        continue;
+      }
+
+      // Get the target message using type::thing for record ID
+      // Also filter by threadId for safety
+      const targetResults = await this.db.query<[any[]]>(
+        'SELECT * FROM type::thing("mastra_messages", $id) WHERE threadId = $threadId LIMIT 1',
+        { id, threadId }
+      );
+      const targetMsg = targetResults[0]?.[0];
+      if (!targetMsg) continue;
+
+      const targetCreatedAt = targetMsg.createdAt;
+
+      // Get context: messages before and after in the same thread
+      // We query a window around the target message
+      const contextResults = await this.db.query<[any[]]>(
+        `SELECT * FROM mastra_messages
+         WHERE threadId = $threadId
+         ORDER BY createdAt ASC`,
+        { threadId }
+      );
+
+      const threadMessages = contextResults[0] || [];
+
+      // Find index of target message
+      const targetIndex = threadMessages.findIndex(
+        (m) => normalizeId(m.id) === id || m.id === id
+      );
+
+      if (targetIndex === -1) {
+        // Target not found, just add what we have
+        if (!seenIds.has(normalizeId(targetMsg.id))) {
+          seenIds.add(normalizeId(targetMsg.id));
+          allMessages.push({
+            ...targetMsg,
+            id: normalizeId(targetMsg.id),
+            createdAt: ensureDate(targetMsg.createdAt) || new Date(),
+          });
+        }
+        continue;
+      }
+
+      // Get messages in context window
+      const startIndex = Math.max(0, targetIndex - withPreviousMessages);
+      const endIndex = Math.min(threadMessages.length, targetIndex + withNextMessages + 1);
+
+      for (let i = startIndex; i < endIndex; i++) {
+        const msg = threadMessages[i];
+        const msgId = normalizeId(msg.id);
+        if (!seenIds.has(msgId)) {
+          seenIds.add(msgId);
+          allMessages.push({
+            ...msg,
+            id: msgId,
+            createdAt: ensureDate(msg.createdAt) || new Date(),
+          });
+        }
+      }
+    }
+
+    // Sort all messages by createdAt
+    allMessages.sort((a, b) =>
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+
+    return allMessages;
   }
 
   async getMessagesById({
