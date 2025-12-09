@@ -247,8 +247,7 @@ If running alongside other projects:
 | Project | SurrealDB | Redis |
 |---------|-----------|-------|
 | mastra-agent-surreal-starter | `8000` | — |
-| intuition-portal | — | `6378` |
-| intuition-weave | `8001` | `6377` |
+| my-other-project                 | — | `6378` |
 
 ## Architecture
 
