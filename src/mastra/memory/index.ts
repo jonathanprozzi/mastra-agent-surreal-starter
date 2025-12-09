@@ -10,7 +10,8 @@
 
 import { anthropic } from '@ai-sdk/anthropic';
 import { Memory } from '@mastra/memory';
-import { SurrealStore, SurrealVector } from '../storage';
+import { SurrealStore } from '../storage';
+import { SurrealVector } from '../vector';
 
 /**
  * SurrealDB store for agent memory (threads, messages, resources)
@@ -44,7 +45,7 @@ export const memory = new Memory({
     semanticRecall: {
       topK: 5, // Number of similar messages to retrieve
       messageRange: 2, // Include surrounding context
-      resourceScope: true, // Search across ALL threads for this user
+      scope: 'resource', // Search across ALL threads for this user
     },
 
     // Working memory: persistent user context

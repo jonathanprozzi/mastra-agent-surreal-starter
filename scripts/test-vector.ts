@@ -8,7 +8,7 @@
  * - .env file configured
  */
 
-import { SurrealVector } from '../src/mastra/storage/surreal-vector';
+import { SurrealVector } from '../src/mastra/vector';
 
 async function main() {
   console.log('🧪 Testing SurrealVector...\n');

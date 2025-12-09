@@ -19,7 +19,8 @@ import type {
   DeleteIndexParams,
 } from '@mastra/core/vector';
 import type { VectorFilter } from '@mastra/core/vector/filter';
-import { type SurrealDBConfig, loadConfigFromEnv } from './config';
+import { type SurrealDBConfig, loadConfigFromEnv } from '../storage/shared/config';
+import { normalizeId } from '../storage/shared/utils';
 
 // SurrealDB-specific filter type
 export interface SurrealVectorFilter {
@@ -281,7 +282,7 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
       const results = await this.db.query<[any[]]>(query, queryParams);
 
       return (results[0] || []).map((row) => ({
-        id: this.normalizeId(row.id),
+        id: normalizeId(row.id),
         score: typeof row.similarity === 'number' ? row.similarity : 0,
         metadata: row.metadata,
         vector: includeVector ? row.embedding : undefined,
@@ -308,30 +309,12 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
 
     // Convert distance to similarity score (cosine distance = 1 - similarity)
     return (results[0] || []).map((row) => ({
-      id: this.normalizeId(row.id),
+      id: normalizeId(row.id),
       score: typeof row.distance === 'number' ? 1 - row.distance : 0,
       metadata: row.metadata,
       vector: includeVector ? row.embedding : undefined,
       document: row.document,
     }));
-  }
-
-  /**
-   * Normalize SurrealDB record IDs to plain strings
-   */
-  private normalizeId(id: any): string {
-    if (!id) return id;
-    if (typeof id === 'object' && id.id) {
-      return String(id.id);
-    }
-    const str = String(id);
-    if (str.includes(':')) {
-      const parts = str.split(':');
-      let idPart = parts.slice(1).join(':');
-      idPart = idPart.replace(/^[⟨<]/, '').replace(/[⟩>]$/, '');
-      return idPart;
-    }
-    return str;
   }
 
   /**

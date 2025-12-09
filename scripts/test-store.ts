@@ -37,7 +37,7 @@ async function main() {
         role: 'user' as const,
         content: 'Hello, this is a test message!',
         createdAt: new Date(),
-        type: 'v1' as const,
+        type: 'text' as const,
         resourceId: 'test-user',
       }],
       format: 'v1',
