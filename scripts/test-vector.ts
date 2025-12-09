@@ -57,8 +57,8 @@ async function main() {
     console.log('   Stats:', stats);
     console.log('   ✅ Index has', stats.count, 'vectors\n');
 
-    // Test 5: Query vectors
-    console.log('5️⃣ Querying similar vectors...');
+    // Test 5: Query vectors (using HNSW with effort parameter)
+    console.log('5️⃣ Querying similar vectors (HNSW)...');
     const queryVector = testVectors[0]; // Query with first vector (should return itself as top result)
     const results = await vector.query({
       indexName: 'test_embeddings',
@@ -66,7 +66,7 @@ async function main() {
       topK: 3,
       includeVector: false,
     });
-    console.log('   Results:', results.map(r => ({ id: r.id, score: r.score.toFixed(4), metadata: r.metadata })));
+    console.log('   Results:', results.map(r => ({ id: r.id, score: r.score?.toFixed?.(4) ?? r.score, metadata: r.metadata })));
     console.log('   ✅ Found', results.length, 'similar vectors\n');
 
     // Test 6: Query with filter

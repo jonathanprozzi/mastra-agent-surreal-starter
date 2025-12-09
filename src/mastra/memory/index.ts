@@ -44,6 +44,7 @@ export const memory = new Memory({
     semanticRecall: {
       topK: 5, // Number of similar messages to retrieve
       messageRange: 2, // Include surrounding context
+      resourceScope: true, // Search across ALL threads for this user
     },
 
     // Working memory: persistent user context

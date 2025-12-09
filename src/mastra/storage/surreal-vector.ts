@@ -103,10 +103,12 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
     const tableName = this.getTableName(indexName);
     const surrealMetric = METRIC_MAP[metric] || 'COSINE';
 
-    // Check if table already exists
+    // Check if table already exists by looking for defined fields
+    // INFO FOR TABLE returns empty fields/indexes for non-existent tables
     const existing = await this.db.query<[any]>(`INFO FOR TABLE ${tableName}`);
-    if (existing[0] && Object.keys(existing[0]).length > 0) {
-      // Table exists, skip creation
+    const tableInfo = existing[0] as any;
+    if (tableInfo?.fields && Object.keys(tableInfo.fields).length > 0) {
+      // Table has defined fields, skip creation
       return;
     }
 
@@ -238,19 +240,60 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
   }
 
   /**
-   * Query vectors by similarity
+   * Query vectors by similarity using HNSW index
    *
-   * Uses SurrealDB's native vector search with <|topK|> operator
+   * Uses SurrealDB's native HNSW <|k,ef|> operator for O(log n) search.
+   * Key insight: The effort parameter (ef) is REQUIRED - <|k|> alone returns empty.
+   *
+   * HNSW notes:
+   * - Index is in-memory only, requires REBUILD after container restart
+   * - Filter support with HNSW has known bugs (GitHub #5219)
+   * - Falls back to brute force when filters are present
    */
   async query(params: QueryVectorParams<SurrealVectorFilter>): Promise<QueryResult[]> {
     await this.init();
     const { indexName, queryVector, topK = 10, filter, includeVector = false } = params;
     const tableName = this.getTableName(indexName);
 
-    // Build the query with vector similarity search
-    // Use vector::distance::knn() to get the distance from KNN operator
-    // Higher effort value (second param) = more accurate but slower
-    let query = `
+    const queryParams: Record<string, any> = { queryVector };
+    const hasFilter = filter && Object.keys(filter).length > 0;
+
+    // Use brute force for filtered queries (HNSW + filters has bugs)
+    // Use HNSW for unfiltered queries (much faster for large datasets)
+    if (hasFilter) {
+      // Brute force with filters
+      let query = `
+        SELECT
+          id,
+          ${includeVector ? 'embedding,' : ''}
+          metadata,
+          document,
+          vector::similarity::cosine(embedding, $queryVector) AS similarity
+        FROM ${tableName}
+      `;
+
+      const filterClauses = this.buildFilterClauses(filter);
+      if (filterClauses) {
+        query += ` WHERE ${filterClauses}`;
+      }
+      query += ` ORDER BY similarity DESC LIMIT ${topK}`;
+
+      const results = await this.db.query<[any[]]>(query, queryParams);
+
+      return (results[0] || []).map((row) => ({
+        id: this.normalizeId(row.id),
+        score: typeof row.similarity === 'number' ? row.similarity : 0,
+        metadata: row.metadata,
+        vector: includeVector ? row.embedding : undefined,
+        document: row.document,
+      }));
+    }
+
+    // HNSW query without filters - use <|k,ef|> syntax
+    // ef (effort) controls search quality vs speed trade-off
+    // Higher ef = more accurate but slower. 500 is a good balance.
+    const effort = 500;
+    const query = `
       SELECT
         id,
         ${includeVector ? 'embedding,' : ''}
@@ -258,29 +301,15 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
         document,
         vector::distance::knn() AS distance
       FROM ${tableName}
-      WHERE embedding <|${topK}, 40|> $queryVector
+      WHERE embedding <|${topK},${effort}|> $queryVector
     `;
-
-    const queryParams: Record<string, any> = { queryVector };
-
-    // Apply metadata filters if provided
-    if (filter && Object.keys(filter).length > 0) {
-      const filterClauses = this.buildFilterClauses(filter);
-      if (filterClauses) {
-        query += ` AND ${filterClauses}`;
-      }
-    }
-
-    // Order by distance (lower = more similar)
-    query += ` ORDER BY distance`;
 
     const results = await this.db.query<[any[]]>(query, queryParams);
 
-    // Convert distance to similarity score (1 - distance for cosine)
-    // For cosine distance, 0 = identical, 2 = opposite
+    // Convert distance to similarity score (cosine distance = 1 - similarity)
     return (results[0] || []).map((row) => ({
       id: this.normalizeId(row.id),
-      score: row.distance !== undefined ? 1 - row.distance : 0,
+      score: typeof row.distance === 'number' ? 1 - row.distance : 0,
       metadata: row.metadata,
       vector: includeVector ? row.embedding : undefined,
       document: row.document,
