@@ -1,31 +1,64 @@
 /**
  * Memory configuration for Mastra agents
  *
- * Uses SurrealDB for conversation memory via the SurrealStore adapter.
- * SurrealDB provides document, vector, and graph capabilities in a single database.
+ * Uses SurrealDB for all memory capabilities:
+ * - SurrealStore: Conversation threads, messages, working memory
+ * - SurrealVector: Semantic recall via HNSW vector search
+ *
+ * This demonstrates SurrealDB's multi-model advantage: document + vector in one DB.
  */
 
 import { anthropic } from '@ai-sdk/anthropic';
 import { Memory } from '@mastra/memory';
-import { SurrealStore } from '../storage';
+import { SurrealStore, SurrealVector } from '../storage';
 
 /**
- * SurrealDB store for agent memory
+ * SurrealDB store for agent memory (threads, messages, resources)
  * Connects using environment variables (SURREALDB_URL, etc.)
  */
 export const surrealStore = new SurrealStore();
 
 /**
+ * SurrealDB vector store for semantic recall
+ * Uses native HNSW indexing for similarity search
+ */
+export const surrealVector = new SurrealVector();
+
+/**
  * Memory instance for agent conversations
  *
- * Configuration:
- * - lastMessages: Number of recent messages to include in context
- * - threads.generateTitle: Auto-generate thread titles using a model
+ * Features enabled:
+ * - Conversation history (lastMessages)
+ * - Semantic recall (vector search for relevant past messages)
+ * - Working memory (persistent user context across conversations)
+ * - Auto-generated thread titles
  */
 export const memory = new Memory({
   storage: surrealStore,
+  vector: surrealVector,
+  embedder: 'openai/text-embedding-3-small', // 1536 dimensions
   options: {
     lastMessages: 20,
+
+    // Semantic recall: find relevant past messages by meaning
+    semanticRecall: {
+      topK: 5, // Number of similar messages to retrieve
+      messageRange: 2, // Include surrounding context
+    },
+
+    // Working memory: persistent user context
+    workingMemory: {
+      enabled: true,
+      template: `# User Context
+## Preferences
+- Communication style:
+- Topics of interest:
+
+## Session Notes
+- Current goal:
+- Important context:`,
+    },
+
     threads: {
       generateTitle: {
         model: anthropic('claude-haiku-4-20250514'),

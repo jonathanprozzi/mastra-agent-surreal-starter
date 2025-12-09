@@ -95,12 +95,20 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
 
   /**
    * Create a new vector index (table with HNSW index)
+   * Uses IF NOT EXISTS to handle idempotent creation
    */
   async createIndex(params: CreateIndexParams): Promise<void> {
     await this.init();
     const { indexName, dimension, metric = 'cosine' } = params;
     const tableName = this.getTableName(indexName);
     const surrealMetric = METRIC_MAP[metric] || 'COSINE';
+
+    // Check if table already exists
+    const existing = await this.db.query<[any]>(`INFO FOR TABLE ${tableName}`);
+    if (existing[0] && Object.keys(existing[0]).length > 0) {
+      // Table exists, skip creation
+      return;
+    }
 
     // Create the table with vector fields
     await this.db.query(`
