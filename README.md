@@ -4,14 +4,14 @@ Production-ready [Mastra](https://mastra.ai) agent starter with SurrealDB storag
 
 ## Features
 
-- **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraStorage` for full Mastra compatibility
+- **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraStorage` with domain classes (matches official Mastra store patterns)
 - **SurrealDB Vector Store** — `SurrealVector` extends `MastraVector` with native HNSW indexing
-- **Agent Memory** — Persistent conversation threads and messages across sessions
-- **Working Memory** — Resource storage for agent state
+- **Cross-Thread Semantic Recall** — Agent recalls information across different conversation threads via `scope: 'resource'`
+- **Working Memory** — Persistent user context and preferences across sessions
 - **Workflow Persistence** — Snapshot and resume workflow executions
-- **Semantic Search** — Vector similarity queries with metadata filtering
+- **Vector Similarity Search** — HNSW-powered semantic search with metadata filtering
 - **Docker Setup** — One command to start SurrealDB locally
-- **Example Agent** — Working agent with tools, memory, and workflows
+- **Example Agent** — Working agent with tools, memory, and semantic recall
 - **Bun Compatible** — Fast development with Bun runtime
 
 ## Quick Start
@@ -44,22 +44,32 @@ bun run dev
 
 ```
 ├── src/mastra/
-│   ├── agents/          # Agent definitions
-│   ├── tools/           # Tool definitions
-│   ├── workflows/       # Workflow definitions
-│   ├── storage/         # SurrealDB adapters
-│   │   ├── surreal-store.ts   # Storage adapter (MastraStorage)
-│   │   ├── surreal-vector.ts  # Vector adapter (MastraVector)
-│   │   ├── schema.surql       # Database schema
-│   │   └── config.ts          # Configuration
-│   └── index.ts         # Mastra instance
+│   ├── agents/              # Agent definitions
+│   ├── tools/               # Tool definitions
+│   ├── workflows/           # Workflow definitions
+│   ├── memory/              # Memory configuration (semantic recall, working memory)
+│   ├── storage/             # SurrealDB adapters
+│   │   ├── surreal-store.ts # Storage adapter facade
+│   │   ├── domains/         # Domain classes (matches official Mastra patterns)
+│   │   │   ├── memory.ts    # Thread/message persistence
+│   │   │   ├── workflows.ts # Workflow state management
+│   │   │   ├── scores.ts    # Evaluation scoring
+│   │   │   └── observability.ts # Tracing and spans
+│   │   ├── shared/          # Shared utilities and config
+│   │   └── schema.surql     # Database schema
+│   ├── vector/              # Vector store
+│   │   └── surreal-vector.ts # HNSW vector adapter
+│   └── index.ts             # Mastra instance
 ├── scripts/
-│   ├── setup-db.ts      # Apply schema to SurrealDB
-│   ├── reset-db.sh      # Reset database
-│   ├── test-surreal.ts  # Test storage adapter
-│   └── test-vector.ts   # Test vector adapter
-├── docker-compose.yml   # SurrealDB container
-└── .env.example         # Environment template
+│   ├── setup-db.ts          # Apply schema to SurrealDB
+│   ├── reset-db.sh          # Reset database
+│   ├── test-surreal.ts      # Test storage adapter
+│   └── test-vector.ts       # Test vector adapter
+├── examples/
+│   ├── test-cross-thread-recall.ts  # Cross-thread semantic recall demo
+│   └── test-semantic-recall.ts      # Full semantic recall example
+├── docker-compose.yml       # SurrealDB container
+└── .env.example             # Environment template
 ```
 
 ## SurrealDB Storage Adapter
@@ -169,6 +179,37 @@ Test the vector store:
 bun run scripts/test-vector.ts
 ```
 
+## Examples
+
+### Cross-Thread Semantic Recall (The "Lasagna Test")
+
+Demonstrates that the agent can recall information from a different conversation thread:
+
+```bash
+bun run examples/test-cross-thread-recall.ts
+```
+
+This test:
+1. Creates Thread 1 with a cooking conversation (lasagna recipe)
+2. Creates Thread 2 and asks about cooking
+3. Verifies the agent recalls lasagna from Thread 1 while in Thread 2
+
+This works because memory is configured with `scope: 'resource'` — the agent searches across all threads for a given user, not just the current thread.
+
+### Full Semantic Recall Demo
+
+A comprehensive test covering multiple topics and cross-domain recall:
+
+```bash
+bun run examples/test-semantic-recall.ts
+```
+
+This test:
+1. Creates threads with programming topics (TypeScript, React)
+2. Creates threads with cooking topics (pasta carbonara, soufflé)
+3. Tests same-thread recall and cross-thread recall
+4. Verifies vector index statistics
+
 ## Environment Variables
 
 ```bash
@@ -179,11 +220,16 @@ SURREALDB_DB=development
 SURREALDB_USER=root
 SURREALDB_PASS=root
 
-# Model Provider (pick one)
-ANTHROPIC_API_KEY=sk-ant-...
+# LLM Provider (for agent reasoning)
+ANTHROPIC_API_KEY=sk-ant-...    # Recommended for Claude
 # or
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=sk-...           # Also works for GPT models
+
+# Embeddings (required for semantic recall)
+OPENAI_API_KEY=sk-...           # Required - OpenAI embeddings for vector search
 ```
+
+**Note:** Semantic recall requires OpenAI API key for embeddings (Claude doesn't have an embedding model). You can use Claude for reasoning and OpenAI for embeddings — this is a common pattern.
 
 ## Scripts
 
@@ -212,26 +258,32 @@ The `SurrealStore` class extends `MastraStorage` from `@mastra/core/storage`, pr
 - **LibSQLStore** (`@mastra/libsql`) - SQLite-compatible with WAL mode
 - **MongoDBStore** (`@mastra/mongodb`) - Document-oriented NoSQL
 
+### Domain Classes (Implemented)
+
+Following the official Mastra store patterns, storage is organized into domain classes:
+
+| Domain Class | Responsibility |
+|--------------|----------------|
+| `MemorySurreal` | Thread/message CRUD, context retrieval with vector search |
+| `WorkflowsSurreal` | Workflow snapshot persistence and resume |
+| `ScoresSurreal` | Evaluation and scoring data |
+| `ObservabilitySurreal` | Tracing and span management |
+| `OperationsSurreal` | Core table operations (insert, update, delete) |
+
+The `SurrealStore` facade composes these domain classes and delegates operations accordingly.
+
+### Key Implementation Details
+
+- **Record ID Handling**: SurrealDB returns IDs like `table:⟨uuid⟩`. We use `type::thing()` in queries and `normalizeId()` helper to handle this.
+- **HNSW Vector Search**: Uses `<|topK,effort|>` syntax for O(log n) performance. The effort parameter (e.g., 500) is required.
+- **Semantic Recall**: Memory configured with `scope: 'resource'` enables cross-thread knowledge retrieval.
+
 ### Future Improvements
 
-Based on analysis of official Mastra stores, these enhancements would align with best practices:
-
-1. **Domain Classes** - Refactor into separate domain classes:
-   - `SurrealOperations` - Core table operations
-   - `SurrealMemory` - Thread/message persistence
-   - `SurrealWorkflows` - Workflow state management
-   - `SurrealScores` - Evaluation scoring
-   - `SurrealObservability` - Tracing and spans
-
-2. **CI/CD Support** - Add `disableInit` flag (like LibSQLStore) for deployment pipelines
-
-3. **Retry Mechanism** - Implement exponential backoff for connection issues
-
-4. **Full Observability** - Implement span creation/update methods for tracing
-
-5. **Agents Domain** - Add AgentsSurreal for agent-specific operations
-
-6. **Contribute to Mastra** - Package as `@mastra/surrealdb` for the official stores collection
+1. **CI/CD Support** - Add `disableInit` flag (like LibSQLStore) for deployment pipelines
+2. **Retry Mechanism** - Implement exponential backoff for connection issues
+3. **Agents Domain** - Add AgentsSurreal for agent-specific operations
+4. **Contribute to Mastra** - Package as `@mastra/surrealdb` for the official stores collection
 
 ## License
 
