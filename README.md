@@ -5,10 +5,11 @@ Production-ready [Mastra](https://mastra.ai) agent starter with SurrealDB storag
 ## Features
 
 - **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraStorage` for full Mastra compatibility
+- **SurrealDB Vector Store** — `SurrealVector` extends `MastraVector` with native HNSW indexing
 - **Agent Memory** — Persistent conversation threads and messages across sessions
 - **Working Memory** — Resource storage for agent state
 - **Workflow Persistence** — Snapshot and resume workflow executions
-- **Vector Search Ready** — HNSW indexes for semantic memory (just uncomment in schema)
+- **Semantic Search** — Vector similarity queries with metadata filtering
 - **Docker Setup** — One command to start SurrealDB locally
 - **Example Agent** — Working agent with tools, memory, and workflows
 - **Bun Compatible** — Fast development with Bun runtime
@@ -46,15 +47,17 @@ bun run dev
 │   ├── agents/          # Agent definitions
 │   ├── tools/           # Tool definitions
 │   ├── workflows/       # Workflow definitions
-│   ├── storage/         # SurrealDB adapter
-│   │   ├── surreal-store.ts   # Main adapter class
+│   ├── storage/         # SurrealDB adapters
+│   │   ├── surreal-store.ts   # Storage adapter (MastraStorage)
+│   │   ├── surreal-vector.ts  # Vector adapter (MastraVector)
 │   │   ├── schema.surql       # Database schema
 │   │   └── config.ts          # Configuration
 │   └── index.ts         # Mastra instance
 ├── scripts/
 │   ├── setup-db.ts      # Apply schema to SurrealDB
 │   ├── reset-db.sh      # Reset database
-│   └── test-surreal.ts  # Test the adapter
+│   ├── test-surreal.ts  # Test storage adapter
+│   └── test-vector.ts   # Test vector adapter
 ├── docker-compose.yml   # SurrealDB container
 └── .env.example         # Environment template
 ```
@@ -125,19 +128,45 @@ await store.saveResource({
 await store.close();
 ```
 
-### Vector Search (Semantic Memory)
+### Vector Search (SurrealVector)
 
-To enable vector search, uncomment the HNSW indexes in `schema.surql`:
-
-```sql
-DEFINE INDEX idx_messages_embedding ON mastra_messages
-  FIELDS embedding HNSW DIMENSION 1536 DIST COSINE TYPE F32;
-```
-
-Then use the search methods:
+The `SurrealVector` class implements `MastraVector` for native HNSW vector search:
 
 ```typescript
-const similar = await store.searchMessagesByEmbedding(embedding, 10);
+import { SurrealVector } from './src/mastra/storage';
+
+const vector = new SurrealVector();
+
+// Create an index with HNSW
+await vector.createIndex({
+  indexName: 'embeddings',
+  dimension: 1536, // OpenAI embedding dimension
+  metric: 'cosine',
+});
+
+// Upsert vectors with metadata
+await vector.upsert({
+  indexName: 'embeddings',
+  vectors: [embedding1, embedding2],
+  metadata: [{ label: 'doc1' }, { label: 'doc2' }],
+  ids: ['id1', 'id2'],
+});
+
+// Query similar vectors
+const results = await vector.query({
+  indexName: 'embeddings',
+  queryVector: queryEmbedding,
+  topK: 10,
+  filter: { category: 'docs' }, // Optional metadata filter
+});
+
+// results: [{ id, score, metadata }]
+```
+
+Test the vector store:
+
+```bash
+bun run scripts/test-vector.ts
 ```
 
 ## Environment Variables
