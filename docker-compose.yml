@@ -1,12 +1,12 @@
 services:
   surrealdb:
     image: surrealdb/surrealdb:v2.2
-    container_name: mastra-surrealdb
+    container_name: mastra-surreal-starter
     ports:
       - "8000:8000"
     volumes:
       - ./data/surreal:/mydata
-    command: start --user root --pass root --bind 0.0.0.0:8000 rocksdb:/mydata/mastra.db
+    command: start --user root --pass root --bind 0.0.0.0:8000 rocksdb:/mydata/starter.db
     environment:
       - SURREAL_LOG=info
     healthcheck:

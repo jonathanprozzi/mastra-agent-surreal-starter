@@ -1,4 +1,9 @@
-# Mastra Agent Surreal Starter
+# Mastra Agent SurrealDB Starter
+
+[![Node.js](https://img.shields.io/badge/Node.js->=20.9.0-green.svg)](https://nodejs.org/)
+[![SurrealDB](https://img.shields.io/badge/SurrealDB-v2.2-purple.svg)](https://surrealdb.com/)
+
+> **Community Project** - This is an unofficial starter template demonstrating SurrealDB integration with Mastra. See [CONTRIBUTING.md](CONTRIBUTING.md) for the path to contributing this as an official Mastra adapter.
 
 Production-ready [Mastra](https://mastra.ai) agent starter with SurrealDB storage — document, vector, and graph capabilities in a single database.
 
@@ -74,7 +79,7 @@ bun run dev
 
 ## SurrealDB Storage Adapter
 
-The adapter implements storage for all Mastra data types:
+The adapter implements storage for all Mastra data types (9 tables):
 
 | Table | Purpose |
 |-------|---------|
@@ -83,8 +88,10 @@ The adapter implements storage for all Mastra data types:
 | `mastra_workflow_snapshot` | Suspended workflow state |
 | `mastra_traces` | OpenTelemetry data |
 | `mastra_evals` | Evaluation results |
-| `mastra_scorers` | Scoring data |
+| `mastra_scorers` | Scorer definitions |
+| `mastra_scores` | Scoring run data |
 | `mastra_resources` | Working memory |
+| `mastra_agents` | Agent configurations |
 
 ### Usage
 
@@ -240,6 +247,22 @@ OPENAI_API_KEY=sk-...           # Required - OpenAI embeddings for vector search
 | `bun run db:setup` | Apply schema to SurrealDB |
 | `bun run db:reset` | Reset database (removes all data) |
 
+### Testing
+
+| Command | Description |
+|---------|-------------|
+| `bun run test` | Run all vitest tests |
+| `bun run test:watch` | Run tests in watch mode |
+| `bun run test:coverage` | Run tests with coverage report |
+| `bun run test:storage` | Run only storage adapter tests |
+| `bun run test:vector` | Run only vector store tests |
+| `bun run test:quick` | Run quick validation scripts |
+
+The test suite includes:
+- **Storage tests** (`tests/storage.test.ts`) - Thread, message, resource, workflow operations
+- **Vector tests** (`tests/vector.test.ts`) - Index management, HNSW queries, metadata filtering
+- **Integration tests** (`tests/integration.test.ts`) - Cross-thread recall, concurrent operations
+
 ## Port Allocation
 
 If running alongside other projects:
@@ -247,7 +270,7 @@ If running alongside other projects:
 | Project | SurrealDB | Redis |
 |---------|-----------|-------|
 | mastra-agent-surreal-starter | `8000` | — |
-| my-other-project                 | — | `6378` |
+| my-other-project             | — | `6378` |
 
 ## Architecture
 
@@ -267,9 +290,10 @@ Following the official Mastra store patterns, storage is organized into domain c
 | `WorkflowsSurreal` | Workflow snapshot persistence and resume |
 | `ScoresSurreal` | Evaluation and scoring data |
 | `ObservabilitySurreal` | Tracing and span management |
+| `AgentsSurreal` | Agent configuration persistence |
 | `OperationsSurreal` | Core table operations (insert, update, delete) |
 
-The `SurrealStore` facade composes these domain classes and delegates operations accordingly.
+The `SurrealStore` facade composes these 6 domain classes and delegates operations accordingly.
 
 ### Key Implementation Details
 
@@ -282,8 +306,13 @@ The `SurrealStore` facade composes these domain classes and delegates operations
 1. **CI/CD Support** - Add `disableInit` flag (like LibSQLStore) for deployment pipelines
 2. **Retry Mechanism** - Implement exponential backoff for connection issues
 3. **Agents Domain** - Add AgentsSurreal for agent-specific operations
-4. **Contribute to Mastra** - Package as `@mastra/surrealdb` for the official stores collection
+4. **Graph Relationships** - Leverage SurrealDB's graph capabilities for agent relationships
+5. **Contribute to Mastra** - Package as `@mastra/surrealdb` for the official stores collection (see [CONTRIBUTING.md](CONTRIBUTING.md))
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to this project or the path to submitting this as an official Mastra adapter.
 
 ## License
 
-MIT
+Apache 2.0 — aligned with [Mastra's licensing](https://github.com/mastra-ai/mastra/blob/main/LICENSE.md).

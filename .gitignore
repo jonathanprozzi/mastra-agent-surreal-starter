@@ -1,12 +1,73 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.mastra/
 output.txt
-node_modules
-dist
-.mastra
-.env.development
+
+# Environment files
 .env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+
+# Database files
 *.db
 *.db-*
-bun.lock
+*.db-journal
+*.sqlite
+*.sqlite3
 
 # Local SurrealDB data
 data/
+
+# Lock files (using bun)
+bun.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# IDE and editors
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+.temp/
