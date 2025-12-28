@@ -3,30 +3,37 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Production-ready Mastra agent starter with SurrealDB storage - document, vector, and graph capabilities",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "mastra dev",
     "build": "mastra build",
     "start": "mastra start",
     "db:setup": "bun run scripts/setup-db.ts",
     "db:reset": "bash scripts/reset-db.sh",
-    "test:surreal": "bun run scripts/test-surreal.ts"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:storage": "vitest run --testPathPattern=storage",
+    "test:vector": "vitest run --testPathPattern=vector",
+    "test:quick": "bun run scripts/test-surreal.ts && bun run scripts/test-vector.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.12",
     "@ai-sdk/openai": "^2.0.24",
-    "@mastra/core": "0.24.0",
-    "@mastra/memory": "^0.15.11",
+    "@mastra/core": "^0.24.9",
+    "@mastra/memory": "^0.15.13",
     "@mastra/loggers": "^0.10.19",
-    "@mastra/evals": "^0.14.3",
+    "@mastra/evals": "^0.14.4",
     "ai": "^5.0.33",
     "surrealdb": "^1.0.0",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@types/node": "^24.9.1",
-    "mastra": "0.18.0",
-    "typescript": "^5.9.3"
+    "@vitest/coverage-v8": "^3.1.4",
+    "mastra": "^0.18.9",
+    "typescript": "^5.9.3",
+    "vitest": "^3.1.4"
   },
   "engines": {
     "node": ">=20.9.0"
