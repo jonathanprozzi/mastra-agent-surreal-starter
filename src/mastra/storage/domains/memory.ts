@@ -399,6 +399,8 @@ export class MemorySurreal {
     const now = new Date();
     const toSave = {
       ...resource,
+      // StorageResourceType uses 'id' as the resource identifier
+      resourceId: resource.id,
       createdAt: resource.createdAt || now,
       updatedAt: now,
     };

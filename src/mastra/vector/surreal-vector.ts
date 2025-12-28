@@ -351,7 +351,7 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
     const tableName = this.getTableName(indexName);
 
     const updates: string[] = ['updatedAt = time::now()'];
-    const queryParams: Record<string, any> = { id };
+    const queryParams: Record<string, any> = { table: tableName, id };
 
     if (update.vector) {
       updates.push('embedding = $embedding');
@@ -363,8 +363,9 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
       queryParams.metadata = update.metadata;
     }
 
+    // Use type::thing for proper record ID matching
     await this.db.query(
-      `UPDATE ${tableName} SET ${updates.join(', ')} WHERE id = $id`,
+      `UPDATE type::thing($table, $id) SET ${updates.join(', ')}`,
       queryParams
     );
   }
@@ -377,9 +378,11 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
     const { indexName, id } = params;
     const tableName = this.getTableName(indexName);
 
+    // Use type::thing to reference the record by ID
+    // When inserting with `id: $id`, SurrealDB uses it as the record ID
     await this.db.query(
-      `DELETE FROM ${tableName} WHERE id = $id`,
-      { id }
+      `DELETE type::thing($table, $id)`,
+      { table: tableName, id }
     );
   }
 
@@ -397,9 +400,13 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
     const tableName = this.getTableName(indexName);
 
     if (ids && ids.length > 0) {
-      // Delete by IDs
-      const idList = ids.map((id: string) => `"${id}"`).join(', ');
-      await this.db.query(`DELETE FROM ${tableName} WHERE id IN [${idList}]`);
+      // Delete each ID using type::thing for proper record ID matching
+      for (const id of ids) {
+        await this.db.query(
+          `DELETE type::thing($table, $id)`,
+          { table: tableName, id }
+        );
+      }
     } else if (filter) {
       // Delete by filter
       const filterClauses = this.buildFilterClauses(filter);
