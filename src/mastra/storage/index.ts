@@ -11,5 +11,8 @@ export {
   WorkflowsSurreal,
   ScoresSurreal,
   ObservabilitySurreal,
+  AgentsSurreal,
   OperationsSurreal,
+  type StoredAgent,
+  type AgentInput,
 } from './domains';

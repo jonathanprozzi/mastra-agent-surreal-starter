@@ -42,7 +42,10 @@ import {
   WorkflowsSurreal,
   ScoresSurreal,
   ObservabilitySurreal,
+  AgentsSurreal,
   OperationsSurreal,
+  type StoredAgent,
+  type AgentInput,
 } from './domains';
 
 export interface SurrealStoreConfig {
@@ -52,12 +55,15 @@ export interface SurrealStoreConfig {
   username?: string;
   password?: string;
   token?: string;
+  /** Skip automatic initialization (useful for CI/CD pipelines) */
+  disableInit?: boolean;
 }
 
 export class SurrealStore extends MastraStorage {
   private db: Surreal;
   private config: SurrealDBConfig;
   private isConnected = false;
+  private _disableInit: boolean;
   declare stores: StorageDomains;
 
   // Domain instances (lazy initialized after connection)
@@ -65,11 +71,13 @@ export class SurrealStore extends MastraStorage {
   private _workflows!: WorkflowsSurreal;
   private _scores!: ScoresSurreal;
   private _observability!: ObservabilitySurreal;
+  private _agents!: AgentsSurreal;
   private _operations!: OperationsSurreal;
 
   constructor(config?: SurrealStoreConfig) {
     super({ name: 'SurrealStore' });
     this.db = new Surreal();
+    this._disableInit = config?.disableInit ?? false;
     this.config = {
       ...loadConfigFromEnv(),
       ...config,
@@ -113,9 +121,18 @@ export class SurrealStore extends MastraStorage {
     this._workflows = new WorkflowsSurreal(this.db);
     this._scores = new ScoresSurreal(this.db);
     this._observability = new ObservabilitySurreal(this.db);
+    this._agents = new AgentsSurreal(this.db);
     this._operations = new OperationsSurreal(this.db);
 
+    // Initialize agents table
+    await this._agents.init();
+
     this.isConnected = true;
+  }
+
+  /** Whether initialization is disabled (for CI/CD pipelines) */
+  get disableInit(): boolean {
+    return this._disableInit;
   }
 
   async close(): Promise<void> {
@@ -442,6 +459,43 @@ export class SurrealStore extends MastraStorage {
   }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
     await this.init();
     return this._scores.getScoresByEntityId(args);
+  }
+
+  // ============================================
+  // AGENTS (delegates to AgentsSurreal)
+  // ============================================
+
+  async getAgentById(args: { agentId: string }): Promise<StoredAgent | null> {
+    await this.init();
+    return this._agents.getAgentById(args);
+  }
+
+  async createAgent(args: { agent: AgentInput }): Promise<StoredAgent> {
+    await this.init();
+    return this._agents.createAgent(args);
+  }
+
+  async updateAgent(args: {
+    agentId: string;
+    updates: Partial<AgentInput>;
+  }): Promise<StoredAgent> {
+    await this.init();
+    return this._agents.updateAgent(args);
+  }
+
+  async deleteAgent(args: { agentId: string }): Promise<void> {
+    await this.init();
+    return this._agents.deleteAgent(args);
+  }
+
+  async listAgents(args?: {
+    page?: number;
+    perPage?: number;
+    orderBy?: 'name' | 'createdAt' | 'updatedAt';
+    sortDirection?: 'asc' | 'desc';
+  }): Promise<{ agents: StoredAgent[]; total: number; hasMore: boolean }> {
+    await this.init();
+    return this._agents.listAgents(args);
   }
 }
 
