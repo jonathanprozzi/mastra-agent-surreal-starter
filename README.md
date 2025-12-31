@@ -23,7 +23,7 @@ This is a lightweight Mastra agent starter with SurrealDB as the agent's store t
 
 ```bash
 # 1. Clone and setup
-git clone <repo-url> mastra-agent-surreal-starter
+git clone https://github.com/jonathanprozzi/mastra-agent-surreal-starter.git
 cd mastra-agent-surreal-starter
 cp .env.example .env
 # Add your ANTHROPIC_API_KEY or OPENAI_API_KEY to .env
