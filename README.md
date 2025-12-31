@@ -3,9 +3,9 @@
 [![Node.js](https://img.shields.io/badge/Node.js->=20.9.0-green.svg)](https://nodejs.org/)
 [![SurrealDB](https://img.shields.io/badge/SurrealDB-v2.2-purple.svg)](https://surrealdb.com/)
 
-> **Community Project** - This is an unofficial starter template demonstrating SurrealDB integration with Mastra. See [CONTRIBUTING.md](CONTRIBUTING.md) for the path to contributing this as an official Mastra adapter.
+> **Community Project** - Built in collaboration with Claude Opus 4.5 to rapidly prototype [Mastra](https://mastra.ai) with SurrealDB, following established Mastra store patterns.
 
-Production-ready [Mastra](https://mastra.ai) agent starter with SurrealDB storage — document, vector, and graph capabilities in a single database.
+This is a lightweight Mastra agent starter with SurrealDB as the agent's store that we used in a handful of other projects while testing. SurrealDB is a multi-model database with lots of powerful features for agents.
 
 ## Features
 
@@ -81,22 +81,22 @@ bun run dev
 
 The adapter implements storage for all Mastra data types (9 tables):
 
-| Table | Purpose |
-|-------|---------|
-| `mastra_threads` | Conversation threads |
-| `mastra_messages` | Messages with optional embeddings |
-| `mastra_workflow_snapshot` | Suspended workflow state |
-| `mastra_traces` | OpenTelemetry data |
-| `mastra_evals` | Evaluation results |
-| `mastra_scorers` | Scorer definitions |
-| `mastra_scores` | Scoring run data |
-| `mastra_resources` | Working memory |
-| `mastra_agents` | Agent configurations |
+| Table                      | Purpose                           |
+| -------------------------- | --------------------------------- |
+| `mastra_threads`           | Conversation threads              |
+| `mastra_messages`          | Messages with optional embeddings |
+| `mastra_workflow_snapshot` | Suspended workflow state          |
+| `mastra_traces`            | OpenTelemetry data                |
+| `mastra_evals`             | Evaluation results                |
+| `mastra_scorers`           | Scorer definitions                |
+| `mastra_scores`            | Scoring run data                  |
+| `mastra_resources`         | Working memory                    |
+| `mastra_agents`            | Agent configurations              |
 
 ### Usage
 
 ```typescript
-import { SurrealStore } from './src/mastra/storage';
+import { SurrealStore } from "./src/mastra/storage";
 
 const store = new SurrealStore();
 await store.init();
@@ -104,9 +104,9 @@ await store.init();
 // Save a thread (MastraStorage interface)
 const thread = await store.saveThread({
   thread: {
-    id: 'thread-1',
-    resourceId: 'user-123',
-    title: 'My Conversation',
+    id: "thread-1",
+    resourceId: "user-123",
+    title: "My Conversation",
     metadata: {},
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -117,24 +117,24 @@ const thread = await store.saveThread({
 await store.saveMessages({
   messages: [
     {
-      id: 'msg-1',
-      threadId: 'thread-1',
-      role: 'user',
-      content: 'Hello!',
+      id: "msg-1",
+      threadId: "thread-1",
+      role: "user",
+      content: "Hello!",
       createdAt: new Date(),
-      type: 'text',
+      type: "text",
     },
   ],
 });
 
 // Get messages from a thread
-const messages = await store.getMessages({ threadId: 'thread-1' });
+const messages = await store.getMessages({ threadId: "thread-1" });
 
 // Save resource (working memory)
 await store.saveResource({
   resource: {
-    id: 'user-123',
-    workingMemory: JSON.stringify({ theme: 'dark' }),
+    id: "user-123",
+    workingMemory: JSON.stringify({ theme: "dark" }),
     metadata: {},
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -150,31 +150,31 @@ await store.close();
 The `SurrealVector` class implements `MastraVector` for native HNSW vector search:
 
 ```typescript
-import { SurrealVector } from './src/mastra/storage';
+import { SurrealVector } from "./src/mastra/storage";
 
 const vector = new SurrealVector();
 
 // Create an index with HNSW
 await vector.createIndex({
-  indexName: 'embeddings',
+  indexName: "embeddings",
   dimension: 1536, // OpenAI embedding dimension
-  metric: 'cosine',
+  metric: "cosine",
 });
 
 // Upsert vectors with metadata
 await vector.upsert({
-  indexName: 'embeddings',
+  indexName: "embeddings",
   vectors: [embedding1, embedding2],
-  metadata: [{ label: 'doc1' }, { label: 'doc2' }],
-  ids: ['id1', 'id2'],
+  metadata: [{ label: "doc1" }, { label: "doc2" }],
+  ids: ["id1", "id2"],
 });
 
 // Query similar vectors
 const results = await vector.query({
-  indexName: 'embeddings',
+  indexName: "embeddings",
   queryVector: queryEmbedding,
   topK: 10,
-  filter: { category: 'docs' }, // Optional metadata filter
+  filter: { category: "docs" }, // Optional metadata filter
 });
 
 // results: [{ id, score, metadata }]
@@ -197,6 +197,7 @@ bun run examples/test-cross-thread-recall.ts
 ```
 
 This test:
+
 1. Creates Thread 1 with a cooking conversation (lasagna recipe)
 2. Creates Thread 2 and asks about cooking
 3. Verifies the agent recalls lasagna from Thread 1 while in Thread 2
@@ -212,6 +213,7 @@ bun run examples/test-semantic-recall.ts
 ```
 
 This test:
+
 1. Creates threads with programming topics (TypeScript, React)
 2. Creates threads with cooking topics (pasta carbonara, soufflé)
 3. Tests same-thread recall and cross-thread recall
@@ -240,25 +242,26 @@ OPENAI_API_KEY=sk-...           # Required - OpenAI embeddings for vector search
 
 ## Scripts
 
-| Command | Description |
-|---------|-------------|
-| `bun run dev` | Start Mastra Studio |
-| `bun run build` | Build for production |
-| `bun run db:setup` | Apply schema to SurrealDB |
+| Command            | Description                       |
+| ------------------ | --------------------------------- |
+| `bun run dev`      | Start Mastra Studio               |
+| `bun run build`    | Build for production              |
+| `bun run db:setup` | Apply schema to SurrealDB         |
 | `bun run db:reset` | Reset database (removes all data) |
 
 ### Testing
 
-| Command | Description |
-|---------|-------------|
-| `bun run test` | Run all vitest tests |
-| `bun run test:watch` | Run tests in watch mode |
+| Command                 | Description                    |
+| ----------------------- | ------------------------------ |
+| `bun run test`          | Run all vitest tests           |
+| `bun run test:watch`    | Run tests in watch mode        |
 | `bun run test:coverage` | Run tests with coverage report |
-| `bun run test:storage` | Run only storage adapter tests |
-| `bun run test:vector` | Run only vector store tests |
-| `bun run test:quick` | Run quick validation scripts |
+| `bun run test:storage`  | Run only storage adapter tests |
+| `bun run test:vector`   | Run only vector store tests    |
+| `bun run test:quick`    | Run quick validation scripts   |
 
 The test suite includes:
+
 - **Storage tests** (`tests/storage.test.ts`) - Thread, message, resource, workflow operations
 - **Vector tests** (`tests/vector.test.ts`) - Index management, HNSW queries, metadata filtering
 - **Integration tests** (`tests/integration.test.ts`) - Cross-thread recall, concurrent operations
@@ -267,10 +270,10 @@ The test suite includes:
 
 If running alongside other projects:
 
-| Project | SurrealDB | Redis |
-|---------|-----------|-------|
-| mastra-agent-surreal-starter | `8000` | — |
-| my-other-project             | — | `6378` |
+| Project                      | SurrealDB | Redis  |
+| ---------------------------- | --------- | ------ |
+| mastra-agent-surreal-starter | `8000`    | —      |
+| my-other-project             | —         | `6378` |
 
 ## Architecture
 
@@ -284,14 +287,14 @@ The `SurrealStore` class extends `MastraStorage` from `@mastra/core/storage`, pr
 
 Following the official Mastra store patterns, storage is organized into domain classes:
 
-| Domain Class | Responsibility |
-|--------------|----------------|
-| `MemorySurreal` | Thread/message CRUD, context retrieval with vector search |
-| `WorkflowsSurreal` | Workflow snapshot persistence and resume |
-| `ScoresSurreal` | Evaluation and scoring data |
-| `ObservabilitySurreal` | Tracing and span management |
-| `AgentsSurreal` | Agent configuration persistence |
-| `OperationsSurreal` | Core table operations (insert, update, delete) |
+| Domain Class           | Responsibility                                            |
+| ---------------------- | --------------------------------------------------------- |
+| `MemorySurreal`        | Thread/message CRUD, context retrieval with vector search |
+| `WorkflowsSurreal`     | Workflow snapshot persistence and resume                  |
+| `ScoresSurreal`        | Evaluation and scoring data                               |
+| `ObservabilitySurreal` | Tracing and span management                               |
+| `AgentsSurreal`        | Agent configuration persistence                           |
+| `OperationsSurreal`    | Core table operations (insert, update, delete)            |
 
 The `SurrealStore` facade composes these 6 domain classes and delegates operations accordingly.
 
@@ -303,15 +306,12 @@ The `SurrealStore` facade composes these 6 domain classes and delegates operatio
 
 ### Future Improvements
 
-1. **CI/CD Support** - Add `disableInit` flag (like LibSQLStore) for deployment pipelines
-2. **Retry Mechanism** - Implement exponential backoff for connection issues
-3. **Agents Domain** - Add AgentsSurreal for agent-specific operations
-4. **Graph Relationships** - Leverage SurrealDB's graph capabilities for agent relationships
-5. **Contribute to Mastra** - Package as `@mastra/surrealdb` for the official stores collection (see [CONTRIBUTING.md](CONTRIBUTING.md))
+1. **Retry Mechanism** - Implement exponential backoff for connection issues
+2. **Graph Relationships** - Leverage SurrealDB's graph capabilities for agent relationships
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to this project or the path to submitting this as an official Mastra adapter.
+Feedback welcome!
 
 ## License
 
