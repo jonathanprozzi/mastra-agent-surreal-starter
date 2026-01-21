@@ -15,7 +15,7 @@ export const getTimestamp = createTool({
     timestamp: z.string(),
     unix: z.number(),
   }),
-  execute: async ({ context }) => {
+  execute: async (inputData, context) => {
     const now = new Date();
     return {
       timestamp: now.toISOString(),
@@ -38,10 +38,10 @@ export const echo = createTool({
     echoed: z.string(),
     length: z.number(),
   }),
-  execute: async ({ context }) => {
+  execute: async (inputData, context) => {
     return {
-      echoed: context.message,
-      length: context.message.length,
+      echoed: inputData.message,
+      length: inputData.message.length,
     };
   },
 });

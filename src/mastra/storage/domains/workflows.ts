@@ -2,27 +2,40 @@
  * Workflows Domain for SurrealDB Storage
  *
  * Handles workflow snapshots and run tracking.
+ * Extends WorkflowsStorage from @mastra/core for v1 compatibility.
  */
 
 import type Surreal from 'surrealdb';
-import type { WorkflowRun, WorkflowRuns } from '@mastra/core/storage';
+import { WorkflowsStorage } from '@mastra/core/storage/domains';
+import type {
+  WorkflowRun,
+  WorkflowRuns,
+  StorageListWorkflowRunsInput,
+  UpdateWorkflowStateOptions,
+} from '@mastra/core/storage';
 import type { StepResult, WorkflowRunState } from '@mastra/core/workflows';
 
-export class WorkflowsSurreal {
-  constructor(private db: Surreal) {}
+export class WorkflowsSurreal extends WorkflowsStorage {
+  constructor(private db: Surreal) {
+    super();
+  }
+
+  async dangerouslyClearAll(): Promise<void> {
+    await this.db.query('DELETE FROM mastra_workflow_snapshot');
+  }
 
   async updateWorkflowResults({
     workflowName,
     runId,
     stepId,
     result,
-    runtimeContext,
+    requestContext,
   }: {
     workflowName: string;
     runId: string;
     stepId: string;
     result: StepResult<any, any, any, any>;
-    runtimeContext: Record<string, any>;
+    requestContext: Record<string, any>;
   }): Promise<Record<string, StepResult<any, any, any, any>>> {
     // Load existing snapshot and update the step result
     const snapshot = await this.loadWorkflowSnapshot({ workflowName, runId });
@@ -45,13 +58,7 @@ export class WorkflowsSurreal {
   }: {
     workflowName: string;
     runId: string;
-    opts: {
-      status: string;
-      result?: StepResult<any, any, any, any>;
-      error?: string;
-      suspendedPaths?: Record<string, number[]>;
-      waitingPaths?: Record<string, number[]>;
-    };
+    opts: UpdateWorkflowStateOptions;
   }): Promise<WorkflowRunState | undefined> {
     const results = await this.db.query<[WorkflowRunState[]]>(
       `UPDATE mastra_workflow_snapshot SET
@@ -71,11 +78,15 @@ export class WorkflowsSurreal {
     runId,
     resourceId,
     snapshot,
+    createdAt,
+    updatedAt,
   }: {
     workflowName: string;
     runId: string;
     resourceId?: string;
     snapshot: WorkflowRunState;
+    createdAt?: Date;
+    updatedAt?: Date;
   }): Promise<void> {
     const now = new Date();
     await this.db.query(
@@ -85,13 +96,21 @@ export class WorkflowsSurreal {
         resourceId: $resourceId,
         snapshot: $snapshot,
         status: $status,
-        createdAt: $now,
-        updatedAt: $now
+        createdAt: $createdAt,
+        updatedAt: $updatedAt
       } ON DUPLICATE KEY UPDATE
         snapshot = $snapshot,
         status = $status,
         updatedAt = time::now()`,
-      { workflowName, runId, resourceId, snapshot, status: snapshot.status, now }
+      {
+        workflowName,
+        runId,
+        resourceId,
+        snapshot,
+        status: snapshot.status,
+        createdAt: createdAt || now,
+        updatedAt: updatedAt || now,
+      }
     );
   }
 
@@ -109,15 +128,21 @@ export class WorkflowsSurreal {
     return results[0]?.[0]?.snapshot || null;
   }
 
-  async getWorkflowRuns(args?: {
-    workflowName?: string;
-    fromDate?: Date;
-    toDate?: Date;
-    limit?: number;
-    offset?: number;
-    resourceId?: string;
-  }): Promise<WorkflowRuns> {
-    const { workflowName, fromDate, toDate, limit = 100, offset = 0, resourceId } = args || {};
+  async listWorkflowRuns(args?: StorageListWorkflowRunsInput): Promise<WorkflowRuns> {
+    const {
+      workflowName,
+      fromDate,
+      toDate,
+      perPage,
+      page,
+      resourceId,
+      status,
+    } = args || {};
+
+    // If both page and perPage are defined, use pagination
+    const usePagination = page !== undefined && perPage !== undefined;
+    const limit = usePagination ? (perPage === false ? Number.MAX_SAFE_INTEGER : perPage) : 100;
+    const offset = usePagination ? page! * (perPage === false ? 0 : perPage!) : 0;
 
     let query = 'SELECT * FROM mastra_workflow_snapshot WHERE 1=1';
     const params: Record<string, any> = { limit, offset };
@@ -129,6 +154,10 @@ export class WorkflowsSurreal {
     if (resourceId) {
       query += ' AND resourceId = $resourceId';
       params.resourceId = resourceId;
+    }
+    if (status) {
+      query += ' AND status = $status';
+      params.status = status;
     }
     if (fromDate) {
       query += ' AND createdAt >= $fromDate';
@@ -164,6 +193,19 @@ export class WorkflowsSurreal {
 
     const results = await this.db.query<[WorkflowRun[]]>(query, params);
     return results[0]?.[0] || null;
+  }
+
+  async deleteWorkflowRunById({
+    runId,
+    workflowName,
+  }: {
+    runId: string;
+    workflowName: string;
+  }): Promise<void> {
+    await this.db.query(
+      'DELETE FROM mastra_workflow_snapshot WHERE runId = $runId AND workflowName = $workflowName',
+      { runId, workflowName }
+    );
   }
 }
 

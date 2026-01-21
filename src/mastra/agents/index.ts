@@ -8,6 +8,7 @@ import { memory } from '../memory';
  * Replace with your own agent configuration
  */
 export const exampleAgent = new Agent({
+  id: 'example-agent',
   name: 'Example Agent',
   instructions: `You are a helpful assistant powered by Mastra with SurrealDB storage.
 

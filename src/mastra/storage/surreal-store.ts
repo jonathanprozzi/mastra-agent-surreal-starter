@@ -1,7 +1,7 @@
 /**
- * SurrealDB Storage Adapter for Mastra
+ * SurrealDB Storage Adapter for Mastra v1
  *
- * Extends MastraStorage to provide full compatibility with Mastra's storage interface.
+ * Extends MastraCompositeStore to provide full compatibility with Mastra's storage interface.
  * Uses the FACADE pattern - delegates all operations to specialized domain classes.
  *
  * Architecture follows official Mastra store patterns:
@@ -9,33 +9,12 @@
  * - Workflows domain: snapshots, run tracking
  * - Scores domain: evals, scoring data
  * - Observability domain: traces, spans
- * - Operations domain: generic table CRUD
+ * - Agents domain: agent configurations
  */
 
 import Surreal from 'surrealdb';
-import { MastraStorage } from '@mastra/core/storage';
-import type {
-  TABLE_NAMES,
-  StorageColumn,
-  StorageResourceType,
-  StorageGetMessagesArg,
-  StorageGetTracesArg,
-  StorageGetTracesPaginatedArg,
-  EvalRow,
-  PaginationInfo,
-  PaginationArgs,
-  StoragePagination,
-  WorkflowRun,
-  WorkflowRuns,
-  ThreadSortOptions,
-  StorageDomains,
-} from '@mastra/core/storage';
-import type { StorageThreadType, MastraMessageV1 } from '@mastra/core/memory';
-import type { MastraMessageV2, MastraMessageContentV2 } from '@mastra/core/agent';
-import type { ScoreRowData, ScoringSource } from '@mastra/core/scores';
-import type { Trace } from '@mastra/core/telemetry';
-import type { StepResult, WorkflowRunState } from '@mastra/core/workflows';
-
+import { MastraCompositeStore } from '@mastra/core/storage';
+import type { StorageDomains } from '@mastra/core/storage';
 import { type SurrealDBConfig, loadConfigFromEnv } from './shared/config';
 import {
   MemorySurreal,
@@ -43,9 +22,6 @@ import {
   ScoresSurreal,
   ObservabilitySurreal,
   AgentsSurreal,
-  OperationsSurreal,
-  type StoredAgent,
-  type AgentInput,
 } from './domains';
 
 export interface SurrealStoreConfig {
@@ -59,12 +35,10 @@ export interface SurrealStoreConfig {
   disableInit?: boolean;
 }
 
-export class SurrealStore extends MastraStorage {
+export class SurrealStore extends MastraCompositeStore {
   private db: Surreal;
   private config: SurrealDBConfig;
   private isConnected = false;
-  private _disableInit: boolean;
-  declare stores: StorageDomains;
 
   // Domain instances (lazy initialized after connection)
   private _memory!: MemorySurreal;
@@ -72,28 +46,17 @@ export class SurrealStore extends MastraStorage {
   private _scores!: ScoresSurreal;
   private _observability!: ObservabilitySurreal;
   private _agents!: AgentsSurreal;
-  private _operations!: OperationsSurreal;
 
   constructor(config?: SurrealStoreConfig) {
-    super({ name: 'SurrealStore' });
+    super({
+      id: 'surreal-store',
+      name: 'SurrealStore',
+      disableInit: config?.disableInit ?? false,
+    });
     this.db = new Surreal();
-    this._disableInit = config?.disableInit ?? false;
     this.config = {
       ...loadConfigFromEnv(),
       ...config,
-    };
-  }
-
-  get supports() {
-    return {
-      selectByIncludeResourceScope: true,
-      resourceWorkingMemory: true,
-      hasColumn: false,
-      createTable: true,
-      deleteMessages: true,
-      aiTracing: false, // TODO: implement
-      indexManagement: false, // TODO: implement
-      getScoresBySpan: false, // TODO: implement
     };
   }
 
@@ -122,17 +85,20 @@ export class SurrealStore extends MastraStorage {
     this._scores = new ScoresSurreal(this.db);
     this._observability = new ObservabilitySurreal(this.db);
     this._agents = new AgentsSurreal(this.db);
-    this._operations = new OperationsSurreal(this.db);
 
     // Initialize agents table
     await this._agents.init();
 
-    this.isConnected = true;
-  }
+    // Set up the stores property for getStore() access
+    this.stores = {
+      memory: this._memory,
+      workflows: this._workflows,
+      scores: this._scores,
+      observability: this._observability,
+      agents: this._agents,
+    } as StorageDomains;
 
-  /** Whether initialization is disabled (for CI/CD pipelines) */
-  get disableInit(): boolean {
-    return this._disableInit;
+    this.isConnected = true;
   }
 
   async close(): Promise<void> {
@@ -140,362 +106,15 @@ export class SurrealStore extends MastraStorage {
     this.isConnected = false;
   }
 
-  // ============================================
-  // TABLE OPERATIONS (delegates to OperationsSurreal)
-  // ============================================
-
-  async createTable(args: {
-    tableName: TABLE_NAMES;
-    schema: Record<string, StorageColumn>;
-  }): Promise<void> {
+  /**
+   * Get a domain-specific storage interface.
+   * Overrides base class to ensure initialization before access.
+   */
+  async getStore<K extends keyof StorageDomains>(
+    storeName: K
+  ): Promise<StorageDomains[K] | undefined> {
     await this.init();
-    return this._operations.createTable(args);
-  }
-
-  async clearTable(args: { tableName: TABLE_NAMES }): Promise<void> {
-    await this.init();
-    return this._operations.clearTable(args);
-  }
-
-  async dropTable(args: { tableName: TABLE_NAMES }): Promise<void> {
-    await this.init();
-    return this._operations.dropTable(args);
-  }
-
-  async alterTable(args: {
-    tableName: TABLE_NAMES;
-    schema: Record<string, StorageColumn>;
-    ifNotExists: string[];
-  }): Promise<void> {
-    await this.init();
-    return this._operations.alterTable(args);
-  }
-
-  async insert(args: {
-    tableName: TABLE_NAMES;
-    record: Record<string, any>;
-  }): Promise<void> {
-    await this.init();
-    return this._operations.insert(args);
-  }
-
-  async batchInsert(args: {
-    tableName: TABLE_NAMES;
-    records: Record<string, any>[];
-  }): Promise<void> {
-    await this.init();
-    return this._operations.batchInsert(args);
-  }
-
-  async load<R>(args: {
-    tableName: TABLE_NAMES;
-    keys: Record<string, any>;
-  }): Promise<R | null> {
-    await this.init();
-    return this._operations.load<R>(args);
-  }
-
-  // ============================================
-  // THREADS (delegates to MemorySurreal)
-  // ============================================
-
-  async getThreadById(args: { threadId: string }): Promise<StorageThreadType | null> {
-    await this.init();
-    return this._memory.getThreadById(args);
-  }
-
-  async getThreadsByResourceId(
-    args: { resourceId: string } & ThreadSortOptions
-  ): Promise<StorageThreadType[]> {
-    await this.init();
-    return this._memory.getThreadsByResourceId(args);
-  }
-
-  async getThreadsByResourceIdPaginated(
-    args: { resourceId: string; page: number; perPage: number } & ThreadSortOptions
-  ): Promise<PaginationInfo & { threads: StorageThreadType[] }> {
-    await this.init();
-    return this._memory.getThreadsByResourceIdPaginated(args);
-  }
-
-  async saveThread(args: { thread: StorageThreadType }): Promise<StorageThreadType> {
-    await this.init();
-    return this._memory.saveThread(args);
-  }
-
-  async updateThread(args: {
-    id: string;
-    title: string;
-    metadata: Record<string, unknown>;
-  }): Promise<StorageThreadType> {
-    await this.init();
-    return this._memory.updateThread(args);
-  }
-
-  async deleteThread(args: { threadId: string }): Promise<void> {
-    await this.init();
-    return this._memory.deleteThread(args);
-  }
-
-  // ============================================
-  // MESSAGES (delegates to MemorySurreal)
-  // ============================================
-
-  async getMessages(args: StorageGetMessagesArg & { format?: 'v1' }): Promise<MastraMessageV1[]>;
-  async getMessages(args: StorageGetMessagesArg & { format: 'v2' }): Promise<MastraMessageV2[]>;
-  async getMessages(
-    args: StorageGetMessagesArg & { format?: 'v1' | 'v2' }
-  ): Promise<MastraMessageV1[] | MastraMessageV2[]> {
-    await this.init();
-    return this._memory.getMessages(args);
-  }
-
-  async getMessagesById(args: { messageIds: string[]; format: 'v1' }): Promise<MastraMessageV1[]>;
-  async getMessagesById(args: { messageIds: string[]; format?: 'v2' }): Promise<MastraMessageV2[]>;
-  async getMessagesById(args: {
-    messageIds: string[];
-    format?: 'v1' | 'v2';
-  }): Promise<MastraMessageV1[] | MastraMessageV2[]> {
-    await this.init();
-    return this._memory.getMessagesById(args);
-  }
-
-  async getMessagesPaginated(
-    args: StorageGetMessagesArg & { format?: 'v1' | 'v2' }
-  ): Promise<PaginationInfo & { messages: MastraMessageV1[] | MastraMessageV2[] }> {
-    await this.init();
-    return this._memory.getMessagesPaginated(args);
-  }
-
-  async saveMessages(args: { messages: MastraMessageV1[]; format?: 'v1' }): Promise<MastraMessageV1[]>;
-  async saveMessages(args: { messages: MastraMessageV2[]; format: 'v2' }): Promise<MastraMessageV2[]>;
-  async saveMessages(
-    args: { messages: MastraMessageV1[]; format?: 'v1' } | { messages: MastraMessageV2[]; format: 'v2' }
-  ): Promise<MastraMessageV1[] | MastraMessageV2[]> {
-    await this.init();
-    return this._memory.saveMessages(args);
-  }
-
-  async updateMessages(args: {
-    messages: (Partial<Omit<MastraMessageV2, 'createdAt'>> & {
-      id: string;
-      content?: { metadata?: MastraMessageContentV2['metadata']; content?: MastraMessageContentV2['content'] };
-    })[];
-  }): Promise<MastraMessageV2[]> {
-    await this.init();
-    return this._memory.updateMessages(args);
-  }
-
-  async deleteMessages(messageIds: string[]): Promise<void> {
-    await this.init();
-    return this._memory.deleteMessages(messageIds);
-  }
-
-  // ============================================
-  // RESOURCES (delegates to MemorySurreal)
-  // ============================================
-
-  async getResourceById(args: { resourceId: string }): Promise<StorageResourceType | null> {
-    await this.init();
-    return this._memory.getResourceById(args);
-  }
-
-  async saveResource(args: { resource: StorageResourceType }): Promise<StorageResourceType> {
-    await this.init();
-    return this._memory.saveResource(args);
-  }
-
-  async updateResource(args: {
-    resourceId: string;
-    workingMemory?: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<StorageResourceType> {
-    await this.init();
-    return this._memory.updateResource(args);
-  }
-
-  // ============================================
-  // WORKFLOWS (delegates to WorkflowsSurreal)
-  // ============================================
-
-  async updateWorkflowResults(args: {
-    workflowName: string;
-    runId: string;
-    stepId: string;
-    result: StepResult<any, any, any, any>;
-    runtimeContext: Record<string, any>;
-  }): Promise<Record<string, StepResult<any, any, any, any>>> {
-    await this.init();
-    return this._workflows.updateWorkflowResults(args);
-  }
-
-  async updateWorkflowState(args: {
-    workflowName: string;
-    runId: string;
-    opts: {
-      status: string;
-      result?: StepResult<any, any, any, any>;
-      error?: string;
-      suspendedPaths?: Record<string, number[]>;
-      waitingPaths?: Record<string, number[]>;
-    };
-  }): Promise<WorkflowRunState | undefined> {
-    await this.init();
-    return this._workflows.updateWorkflowState(args);
-  }
-
-  async persistWorkflowSnapshot(args: {
-    workflowName: string;
-    runId: string;
-    resourceId?: string;
-    snapshot: WorkflowRunState;
-  }): Promise<void> {
-    await this.init();
-    return this._workflows.persistWorkflowSnapshot(args);
-  }
-
-  async loadWorkflowSnapshot(args: {
-    workflowName: string;
-    runId: string;
-  }): Promise<WorkflowRunState | null> {
-    await this.init();
-    return this._workflows.loadWorkflowSnapshot(args);
-  }
-
-  async getWorkflowRuns(args?: {
-    workflowName?: string;
-    fromDate?: Date;
-    toDate?: Date;
-    limit?: number;
-    offset?: number;
-    resourceId?: string;
-  }): Promise<WorkflowRuns> {
-    await this.init();
-    return this._workflows.getWorkflowRuns(args);
-  }
-
-  async getWorkflowRunById(args: {
-    runId: string;
-    workflowName?: string;
-  }): Promise<WorkflowRun | null> {
-    await this.init();
-    return this._workflows.getWorkflowRunById(args);
-  }
-
-  // ============================================
-  // TRACES (delegates to ObservabilitySurreal)
-  // ============================================
-
-  async getTraces(args: StorageGetTracesArg): Promise<Trace[]> {
-    await this.init();
-    return this._observability.getTraces(args);
-  }
-
-  async getTracesPaginated(
-    args: StorageGetTracesPaginatedArg
-  ): Promise<PaginationInfo & { traces: Trace[] }> {
-    await this.init();
-    return this._observability.getTracesPaginated(args);
-  }
-
-  async batchTraceInsert(args: { records: Record<string, any>[] }): Promise<void> {
-    await this.init();
-    return this._observability.batchTraceInsert(args);
-  }
-
-  // ============================================
-  // EVALS (delegates to ScoresSurreal)
-  // ============================================
-
-  async getEvalsByAgentName(agentName: string, type?: 'test' | 'live'): Promise<EvalRow[]> {
-    await this.init();
-    return this._scores.getEvalsByAgentName(agentName, type);
-  }
-
-  async getEvals(
-    options?: { agentName?: string; type?: 'test' | 'live' } & PaginationArgs
-  ): Promise<PaginationInfo & { evals: EvalRow[] }> {
-    await this.init();
-    return this._scores.getEvals(options);
-  }
-
-  // ============================================
-  // SCORES (delegates to ScoresSurreal)
-  // ============================================
-
-  async getScoreById(args: { id: string }): Promise<ScoreRowData | null> {
-    await this.init();
-    return this._scores.getScoreById(args);
-  }
-
-  async saveScore(score: ScoreRowData): Promise<{ score: ScoreRowData }> {
-    await this.init();
-    return this._scores.saveScore(score);
-  }
-
-  async getScoresByScorerId(args: {
-    scorerId: string;
-    pagination: StoragePagination;
-    entityId?: string;
-    entityType?: string;
-    source?: ScoringSource;
-  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
-    await this.init();
-    return this._scores.getScoresByScorerId(args);
-  }
-
-  async getScoresByRunId(args: {
-    runId: string;
-    pagination: StoragePagination;
-  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
-    await this.init();
-    return this._scores.getScoresByRunId(args);
-  }
-
-  async getScoresByEntityId(args: {
-    entityId: string;
-    entityType: string;
-    pagination: StoragePagination;
-  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
-    await this.init();
-    return this._scores.getScoresByEntityId(args);
-  }
-
-  // ============================================
-  // AGENTS (delegates to AgentsSurreal)
-  // ============================================
-
-  async getAgentById(args: { agentId: string }): Promise<StoredAgent | null> {
-    await this.init();
-    return this._agents.getAgentById(args);
-  }
-
-  async createAgent(args: { agent: AgentInput }): Promise<StoredAgent> {
-    await this.init();
-    return this._agents.createAgent(args);
-  }
-
-  async updateAgent(args: {
-    agentId: string;
-    updates: Partial<AgentInput>;
-  }): Promise<StoredAgent> {
-    await this.init();
-    return this._agents.updateAgent(args);
-  }
-
-  async deleteAgent(args: { agentId: string }): Promise<void> {
-    await this.init();
-    return this._agents.deleteAgent(args);
-  }
-
-  async listAgents(args?: {
-    page?: number;
-    perPage?: number;
-    orderBy?: 'name' | 'createdAt' | 'updatedAt';
-    sortDirection?: 'asc' | 'desc';
-  }): Promise<{ agents: StoredAgent[]; total: number; hasMore: boolean }> {
-    await this.init();
-    return this._agents.listAgents(args);
+    return this.stores?.[storeName];
   }
 }
 

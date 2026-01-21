@@ -2,54 +2,28 @@
  * Agents Domain for SurrealDB Storage
  *
  * Handles agent configurations and persistence.
- * Follows Mastra's AgentsPG pattern for consistency.
+ * Extends AgentsStorage from @mastra/core for v1 compatibility.
  */
 
 import type Surreal from 'surrealdb';
+import { AgentsStorage } from '@mastra/core/storage/domains';
+import type {
+  StorageAgentType,
+  StorageCreateAgentInput,
+  StorageUpdateAgentInput,
+  StorageListAgentsInput,
+  StorageListAgentsOutput,
+} from '@mastra/core/storage';
 import { normalizeId, ensureDate } from '../shared/utils';
 
-/**
- * Agent record stored in SurrealDB
- * Matches the structure from @mastra/core
- */
-export interface StoredAgent {
-  id: string;
-  name: string;
-  description?: string;
-  instructions?: string;
-  model?: string; // JSON serialized
-  tools?: string; // JSON serialized
-  defaultOptions?: string; // JSON serialized
-  workflows?: string; // JSON serialized
-  agents?: string; // JSON serialized
-  inputProcessors?: string; // JSON serialized
-  outputProcessors?: string; // JSON serialized
-  memory?: string; // JSON serialized
-  scorers?: string; // JSON serialized
-  metadata?: Record<string, unknown>;
-  createdAt: Date;
-  updatedAt: Date;
-}
+export class AgentsSurreal extends AgentsStorage {
+  constructor(private db: Surreal) {
+    super();
+  }
 
-export interface AgentInput {
-  id: string;
-  name: string;
-  description?: string;
-  instructions?: string;
-  model?: Record<string, unknown>;
-  tools?: Record<string, unknown>[];
-  defaultOptions?: Record<string, unknown>;
-  workflows?: Record<string, unknown>;
-  agents?: Record<string, unknown>;
-  inputProcessors?: unknown[];
-  outputProcessors?: unknown[];
-  memory?: Record<string, unknown>;
-  scorers?: unknown[];
-  metadata?: Record<string, unknown>;
-}
-
-export class AgentsSurreal {
-  constructor(private db: Surreal) {}
+  async dangerouslyClearAll(): Promise<void> {
+    await this.db.query('DELETE FROM mastra_agents');
+  }
 
   /**
    * Initialize the agents table (called during store init)
@@ -66,10 +40,10 @@ export class AgentsSurreal {
   /**
    * Get an agent by ID
    */
-  async getAgentById({ agentId }: { agentId: string }): Promise<StoredAgent | null> {
-    const results = await this.db.query<[StoredAgent[]]>(
-      'SELECT * FROM type::thing("mastra_agents", $agentId)',
-      { agentId }
+  async getAgentById({ id }: { id: string }): Promise<StorageAgentType | null> {
+    const results = await this.db.query<[any[]]>(
+      'SELECT * FROM type::thing("mastra_agents", $id)',
+      { id }
     );
     const agent = results[0]?.[0];
     if (!agent) return null;
@@ -79,11 +53,15 @@ export class AgentsSurreal {
   /**
    * Create a new agent
    */
-  async createAgent({ agent }: { agent: AgentInput }): Promise<StoredAgent> {
+  async createAgent({ agent }: { agent: StorageCreateAgentInput }): Promise<StorageAgentType> {
     const now = new Date();
-    const toSave = this.serializeAgent(agent, now);
+    const toSave = {
+      ...agent,
+      createdAt: now,
+      updatedAt: now,
+    };
 
-    const results = await this.db.query<[StoredAgent[]]>(
+    const results = await this.db.query<[any[]]>(
       `INSERT INTO mastra_agents $agent`,
       { agent: toSave }
     );
@@ -97,18 +75,15 @@ export class AgentsSurreal {
    * Update an existing agent
    */
   async updateAgent({
-    agentId,
-    updates,
-  }: {
-    agentId: string;
-    updates: Partial<AgentInput>;
-  }): Promise<StoredAgent> {
-    const existing = await this.getAgentById({ agentId });
-    if (!existing) throw new Error(`Agent not found: ${agentId}`);
+    id,
+    ...updates
+  }: StorageUpdateAgentInput): Promise<StorageAgentType> {
+    const existing = await this.getAgentById({ id });
+    if (!existing) throw new Error(`Agent not found: ${id}`);
 
     const now = new Date();
     const updateFields: string[] = ['updatedAt = $now'];
-    const params: Record<string, unknown> = { agentId, now };
+    const params: Record<string, unknown> = { id, now };
 
     // Build dynamic update query
     if (updates.name !== undefined) {
@@ -125,82 +100,78 @@ export class AgentsSurreal {
     }
     if (updates.model !== undefined) {
       updateFields.push('model = $model');
-      params.model = JSON.stringify(updates.model);
+      params.model = updates.model;
     }
     if (updates.tools !== undefined) {
       updateFields.push('tools = $tools');
-      params.tools = JSON.stringify(updates.tools);
+      params.tools = updates.tools;
     }
     if (updates.defaultOptions !== undefined) {
       updateFields.push('defaultOptions = $defaultOptions');
-      params.defaultOptions = JSON.stringify(updates.defaultOptions);
+      params.defaultOptions = updates.defaultOptions;
     }
     if (updates.workflows !== undefined) {
       updateFields.push('workflows = $workflows');
-      params.workflows = JSON.stringify(updates.workflows);
+      params.workflows = updates.workflows;
     }
     if (updates.agents !== undefined) {
       updateFields.push('agents = $agents');
-      params.agents = JSON.stringify(updates.agents);
+      params.agents = updates.agents;
     }
     if (updates.inputProcessors !== undefined) {
       updateFields.push('inputProcessors = $inputProcessors');
-      params.inputProcessors = JSON.stringify(updates.inputProcessors);
+      params.inputProcessors = updates.inputProcessors;
     }
     if (updates.outputProcessors !== undefined) {
       updateFields.push('outputProcessors = $outputProcessors');
-      params.outputProcessors = JSON.stringify(updates.outputProcessors);
+      params.outputProcessors = updates.outputProcessors;
     }
     if (updates.memory !== undefined) {
       updateFields.push('memory = $memory');
-      params.memory = JSON.stringify(updates.memory);
+      params.memory = updates.memory;
     }
     if (updates.scorers !== undefined) {
       updateFields.push('scorers = $scorers');
-      params.scorers = JSON.stringify(updates.scorers);
+      params.scorers = updates.scorers;
     }
     if (updates.metadata !== undefined) {
       updateFields.push('metadata = $metadata');
       params.metadata = updates.metadata;
     }
 
-    const results = await this.db.query<[StoredAgent[]]>(
-      `UPDATE type::thing("mastra_agents", $agentId) SET ${updateFields.join(', ')}`,
+    const results = await this.db.query<[any[]]>(
+      `UPDATE type::thing("mastra_agents", $id) SET ${updateFields.join(', ')}`,
       params
     );
 
     const updated = results[0]?.[0];
-    if (!updated) throw new Error(`Failed to update agent: ${agentId}`);
+    if (!updated) throw new Error(`Failed to update agent: ${id}`);
     return this.normalizeAgent(updated);
   }
 
   /**
    * Delete an agent
    */
-  async deleteAgent({ agentId }: { agentId: string }): Promise<void> {
+  async deleteAgent({ id }: { id: string }): Promise<void> {
     await this.db.query(
-      'DELETE type::thing("mastra_agents", $agentId)',
-      { agentId }
+      'DELETE type::thing("mastra_agents", $id)',
+      { id }
     );
   }
 
   /**
    * List agents with pagination
    */
-  async listAgents(args?: {
-    page?: number;
-    perPage?: number;
-    orderBy?: 'name' | 'createdAt' | 'updatedAt';
-    sortDirection?: 'asc' | 'desc';
-  }): Promise<{ agents: StoredAgent[]; total: number; hasMore: boolean }> {
+  async listAgents(args?: StorageListAgentsInput): Promise<StorageListAgentsOutput> {
     const {
-      page = 1,
-      perPage = 50,
-      orderBy = 'createdAt',
-      sortDirection = 'desc',
+      page = 0,
+      perPage = 100,
+      orderBy,
     } = args || {};
 
-    const offset = (page - 1) * perPage;
+    const { field, direction } = this.parseOrderBy(orderBy);
+    const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
+    const offset = page * (perPage === false ? 0 : perPage);
 
     // Get total count
     const countResult = await this.db.query<[{ count: number }[]]>(
@@ -209,61 +180,25 @@ export class AgentsSurreal {
     const total = countResult[0]?.[0]?.count || 0;
 
     // Get paginated results
-    const results = await this.db.query<[StoredAgent[]]>(
+    const results = await this.db.query<[any[]]>(
       `SELECT * FROM mastra_agents
-       ORDER BY ${orderBy} ${sortDirection.toUpperCase()}
+       ORDER BY ${field} ${direction.toUpperCase()}
        LIMIT $limit START $offset`,
-      { limit: perPage, offset }
+      { limit, offset }
     );
 
     const agents = (results[0] || []).map((a) => this.normalizeAgent(a));
-    const hasMore = offset + agents.length < total;
 
-    return { agents, total, hasMore };
-  }
-
-  /**
-   * Clear all agents (dangerous!)
-   */
-  async dangerouslyClearAll(): Promise<void> {
-    await this.db.query('DELETE mastra_agents');
-  }
-
-  // ============================================
-  // PRIVATE HELPERS
-  // ============================================
-
-  private serializeAgent(
-    agent: AgentInput,
-    now: Date
-  ): Record<string, unknown> {
     return {
-      id: agent.id,
-      name: agent.name,
-      description: agent.description,
-      instructions: agent.instructions,
-      model: agent.model ? JSON.stringify(agent.model) : undefined,
-      tools: agent.tools ? JSON.stringify(agent.tools) : undefined,
-      defaultOptions: agent.defaultOptions
-        ? JSON.stringify(agent.defaultOptions)
-        : undefined,
-      workflows: agent.workflows ? JSON.stringify(agent.workflows) : undefined,
-      agents: agent.agents ? JSON.stringify(agent.agents) : undefined,
-      inputProcessors: agent.inputProcessors
-        ? JSON.stringify(agent.inputProcessors)
-        : undefined,
-      outputProcessors: agent.outputProcessors
-        ? JSON.stringify(agent.outputProcessors)
-        : undefined,
-      memory: agent.memory ? JSON.stringify(agent.memory) : undefined,
-      scorers: agent.scorers ? JSON.stringify(agent.scorers) : undefined,
-      metadata: agent.metadata,
-      createdAt: now,
-      updatedAt: now,
+      agents,
+      page,
+      perPage: perPage === false ? false : perPage,
+      total,
+      hasMore: perPage !== false && offset + agents.length < total,
     };
   }
 
-  private normalizeAgent(agent: StoredAgent): StoredAgent {
+  private normalizeAgent(agent: any): StorageAgentType {
     return {
       ...agent,
       id: normalizeId(agent.id),
@@ -272,3 +207,5 @@ export class AgentsSurreal {
     };
   }
 }
+
+export default AgentsSurreal;

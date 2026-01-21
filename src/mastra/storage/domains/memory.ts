@@ -2,21 +2,33 @@
  * Memory Domain for SurrealDB Storage
  *
  * Handles threads, messages, and resources (working memory).
+ * Extends MemoryStorage from @mastra/core for v1 compatibility.
  */
 
 import type Surreal from 'surrealdb';
+import { MemoryStorage } from '@mastra/core/storage/domains';
 import type {
-  StorageGetMessagesArg,
   StorageResourceType,
+  StorageListMessagesInput,
+  StorageListMessagesOutput,
+  StorageListThreadsInput,
+  StorageListThreadsOutput,
   PaginationInfo,
-  ThreadSortOptions,
 } from '@mastra/core/storage';
-import type { StorageThreadType, MastraMessageV1 } from '@mastra/core/memory';
-import type { MastraMessageV2, MastraMessageContentV2 } from '@mastra/core/agent';
-import { normalizeId, ensureDate, resolveMessageLimit } from '../shared/utils';
+import type { StorageThreadType } from '@mastra/core/memory';
+import type { MastraDBMessage, MastraMessageContentV2 } from '@mastra/core/agent';
+import { normalizeId, ensureDate } from '../shared/utils';
 
-export class MemorySurreal {
-  constructor(private db: Surreal) {}
+export class MemorySurreal extends MemoryStorage {
+  constructor(private db: Surreal) {
+    super();
+  }
+
+  async dangerouslyClearAll(): Promise<void> {
+    await this.db.query('DELETE FROM mastra_threads');
+    await this.db.query('DELETE FROM mastra_messages');
+    await this.db.query('DELETE FROM mastra_resources');
+  }
 
   // ============================================
   // THREADS
@@ -41,40 +53,49 @@ export class MemorySurreal {
     };
   }
 
-  async getThreadsByResourceId(
-    args: { resourceId: string } & ThreadSortOptions
-  ): Promise<StorageThreadType[]> {
-    const { resourceId, orderBy = 'createdAt', sortDirection = 'desc' } = args;
-    const results = await this.db.query<[StorageThreadType[]]>(
-      `SELECT * FROM mastra_threads WHERE resourceId = $resourceId ORDER BY ${orderBy} ${sortDirection.toUpperCase()}`,
-      { resourceId }
-    );
-    return (results[0] || []).map((t) => ({
-      ...t,
-      id: normalizeId(t.id),
-      createdAt: ensureDate(t.createdAt) || new Date(),
-      updatedAt: ensureDate(t.updatedAt) || new Date(),
-    }));
-  }
+  async listThreads(
+    args: StorageListThreadsInput
+  ): Promise<StorageListThreadsOutput> {
+    const {
+      page = 0,
+      perPage = 100,
+      orderBy,
+      filter,
+    } = args;
 
-  async getThreadsByResourceIdPaginated(
-    args: { resourceId: string; page: number; perPage: number } & ThreadSortOptions
-  ): Promise<PaginationInfo & { threads: StorageThreadType[] }> {
-    const { resourceId, page, perPage, orderBy = 'createdAt', sortDirection = 'desc' } = args;
-    const offset = (page - 1) * perPage;
+    const { field, direction } = this.parseOrderBy(orderBy);
+    const offset = page * (perPage === false ? 0 : perPage);
+    const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
+
+    let query = 'SELECT * FROM mastra_threads WHERE 1=1';
+    const params: Record<string, any> = { limit, offset };
+
+    if (filter?.resourceId) {
+      query += ' AND resourceId = $resourceId';
+      params.resourceId = filter.resourceId;
+    }
+
+    if (filter?.metadata) {
+      this.validateMetadataKeys(filter.metadata);
+      for (const [key, value] of Object.entries(filter.metadata)) {
+        query += ` AND metadata.${key} = $meta_${key}`;
+        params[`meta_${key}`] = value;
+      }
+    }
+
+    query += ` ORDER BY ${field} ${direction.toUpperCase()} LIMIT $limit START $offset`;
 
     // Get total count
-    const countResults = await this.db.query<[{ count: number }[]]>(
-      'SELECT count() as count FROM mastra_threads WHERE resourceId = $resourceId GROUP ALL',
-      { resourceId }
-    );
+    let countQuery = 'SELECT count() as count FROM mastra_threads WHERE 1=1';
+    if (filter?.resourceId) {
+      countQuery += ' AND resourceId = $resourceId';
+    }
+    countQuery += ' GROUP ALL';
+    const countResults = await this.db.query<[{ count: number }[]]>(countQuery, params);
     const total = countResults[0]?.[0]?.count || 0;
 
     // Get paginated results
-    const results = await this.db.query<[StorageThreadType[]]>(
-      `SELECT * FROM mastra_threads WHERE resourceId = $resourceId ORDER BY ${orderBy} ${sortDirection.toUpperCase()} LIMIT $limit START $offset`,
-      { resourceId, limit: perPage, offset }
-    );
+    const results = await this.db.query<[StorageThreadType[]]>(query, params);
 
     const threads = (results[0] || []).map((t) => ({
       ...t,
@@ -86,9 +107,9 @@ export class MemorySurreal {
     return {
       threads,
       page,
-      perPage,
+      perPage: perPage === false ? false : perPage,
       total,
-      hasMore: offset + threads.length < total,
+      hasMore: perPage !== false && offset + threads.length < total,
     };
   }
 
@@ -156,30 +177,73 @@ export class MemorySurreal {
   // MESSAGES
   // ============================================
 
-  async getMessages(
-    args: StorageGetMessagesArg & { format?: 'v1' | 'v2' }
-  ): Promise<MastraMessageV1[] | MastraMessageV2[]> {
-    const { threadId, selectBy, format = 'v1' } = args;
-    const limit = resolveMessageLimit({ last: selectBy?.last, defaultLimit: 100 });
+  async listMessages(args: StorageListMessagesInput): Promise<StorageListMessagesOutput> {
+    const {
+      threadId,
+      include,
+      perPage = 40,
+      page = 0,
+      filter,
+      orderBy,
+    } = args;
 
-    // Handle selectBy.include for cross-thread semantic recall
-    // This is used when vector search returns messages from multiple threads
-    if (selectBy?.include && selectBy.include.length > 0) {
-      return this.getMessagesWithContext(selectBy.include);
+    // Handle include for cross-thread semantic recall
+    if (include && include.length > 0) {
+      const messages = await this.getMessagesWithContext(include);
+      return {
+        messages,
+        page: 0,
+        perPage: messages.length,
+        total: messages.length,
+        hasMore: false,
+      };
     }
 
-    const results = await this.db.query<[any[]]>(
-      'SELECT * FROM mastra_messages WHERE threadId = $threadId ORDER BY createdAt ASC LIMIT $limit',
-      { threadId, limit }
-    );
+    const { field, direction } = this.parseOrderBy(orderBy);
+    const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
+    const offset = page * (perPage === false ? 0 : perPage);
 
-    const messages = results[0] || [];
-    return messages.map((m) => ({
+    // Handle array of threadIds
+    const threadIds = Array.isArray(threadId) ? threadId : [threadId];
+
+    let query = 'SELECT * FROM mastra_messages WHERE threadId IN $threadIds';
+    const params: Record<string, any> = { threadIds, limit, offset };
+
+    if (filter?.dateRange) {
+      if (filter.dateRange.start) {
+        const op = filter.dateRange.startExclusive ? '>' : '>=';
+        query += ` AND createdAt ${op} $startDate`;
+        params.startDate = filter.dateRange.start;
+      }
+      if (filter.dateRange.end) {
+        const op = filter.dateRange.endExclusive ? '<' : '<=';
+        query += ` AND createdAt ${op} $endDate`;
+        params.endDate = filter.dateRange.end;
+      }
+    }
+
+    query += ` ORDER BY ${field} ${direction.toUpperCase()} LIMIT $limit START $offset`;
+
+    const results = await this.db.query<[any[]]>(query, params);
+    const messages = (results[0] || []).map((m) => ({
       ...m,
       id: normalizeId(m.id),
       threadId: m.threadId,
       createdAt: ensureDate(m.createdAt) || new Date(),
     }));
+
+    // Get total count
+    let countQuery = 'SELECT count() as count FROM mastra_messages WHERE threadId IN $threadIds GROUP ALL';
+    const countResults = await this.db.query<[{ count: number }[]]>(countQuery, { threadIds });
+    const total = countResults[0]?.[0]?.count || 0;
+
+    return {
+      messages,
+      page,
+      perPage: perPage === false ? false : perPage,
+      total,
+      hasMore: perPage !== false && offset + messages.length < total,
+    };
   }
 
   /**
@@ -193,7 +257,7 @@ export class MemorySurreal {
       withPreviousMessages?: number;
       withNextMessages?: number;
     }[]
-  ): Promise<any[]> {
+  ): Promise<MastraDBMessage[]> {
     const allMessages: any[] = [];
     const seenIds = new Set<string>();
 
@@ -219,7 +283,6 @@ export class MemorySurreal {
       }
 
       // Get the target message using type::thing for record ID
-      // Also filter by threadId for safety
       const targetResults = await this.db.query<[any[]]>(
         'SELECT * FROM type::thing("mastra_messages", $id) WHERE threadId = $threadId LIMIT 1',
         { id, threadId }
@@ -227,10 +290,7 @@ export class MemorySurreal {
       const targetMsg = targetResults[0]?.[0];
       if (!targetMsg) continue;
 
-      const targetCreatedAt = targetMsg.createdAt;
-
       // Get context: messages before and after in the same thread
-      // We query a window around the target message
       const contextResults = await this.db.query<[any[]]>(
         `SELECT * FROM mastra_messages
          WHERE threadId = $threadId
@@ -284,43 +344,27 @@ export class MemorySurreal {
     return allMessages;
   }
 
-  async getMessagesById({
+  async listMessagesById({
     messageIds,
-    format = 'v1',
   }: {
     messageIds: string[];
-    format?: 'v1' | 'v2';
-  }): Promise<MastraMessageV1[] | MastraMessageV2[]> {
+  }): Promise<{ messages: MastraDBMessage[] }> {
     // Build query for multiple message IDs using SurrealDB record syntax
     const recordIds = messageIds.map(id => `type::thing("mastra_messages", "${id}")`).join(', ');
     const results = await this.db.query<[any[]]>(
       `SELECT * FROM [${recordIds}]`
     );
-    return (results[0] || []).map((m) => ({
+    const messages = (results[0] || []).map((m) => ({
       ...m,
       id: normalizeId(m.id),
       createdAt: ensureDate(m.createdAt) || new Date(),
     }));
+    return { messages };
   }
 
-  async getMessagesPaginated(
-    args: StorageGetMessagesArg & { format?: 'v1' | 'v2' }
-  ): Promise<PaginationInfo & { messages: MastraMessageV1[] | MastraMessageV2[] }> {
-    const messages = await this.getMessages(args);
-    return {
-      messages,
-      page: 1,
-      perPage: messages.length,
-      total: messages.length,
-      hasMore: false,
-    };
-  }
-
-  async saveMessages(
-    args: { messages: MastraMessageV1[]; format?: 'v1' } | { messages: MastraMessageV2[]; format: 'v2' }
-  ): Promise<MastraMessageV1[] | MastraMessageV2[]> {
+  async saveMessages(args: { messages: MastraDBMessage[] }): Promise<{ messages: MastraDBMessage[] }> {
     const { messages } = args;
-    const saved: any[] = [];
+    const saved: MastraDBMessage[] = [];
 
     for (const msg of messages) {
       const toSave = {
@@ -342,27 +386,27 @@ export class MemorySurreal {
       saved.push(toSave);
     }
 
-    return saved;
+    return { messages: saved };
   }
 
   async updateMessages({
     messages,
   }: {
-    messages: (Partial<Omit<MastraMessageV2, 'createdAt'>> & {
+    messages: (Partial<Omit<MastraDBMessage, 'createdAt'>> & {
       id: string;
       content?: { metadata?: MastraMessageContentV2['metadata']; content?: MastraMessageContentV2['content'] };
     })[];
-  }): Promise<MastraMessageV2[]> {
-    const updated: MastraMessageV2[] = [];
+  }): Promise<MastraDBMessage[]> {
+    const updated: MastraDBMessage[] = [];
 
     for (const msg of messages) {
-      const results = await this.db.query<[MastraMessageV2[]]>(
+      const results = await this.db.query<[MastraDBMessage[]]>(
         `UPDATE type::thing("mastra_messages", $id) SET content = $content RETURN AFTER`,
         { id: msg.id, content: msg.content }
       );
       if (results[0]?.[0]) {
         const m = results[0][0];
-        updated.push({ ...m, id: normalizeId(m.id) } as MastraMessageV2);
+        updated.push({ ...m, id: normalizeId(m.id) } as MastraDBMessage);
       }
     }
 

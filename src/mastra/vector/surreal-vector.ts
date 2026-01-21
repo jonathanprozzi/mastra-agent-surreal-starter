@@ -15,6 +15,7 @@ import type {
   QueryVectorParams,
   UpdateVectorParams,
   DeleteVectorParams,
+  DeleteVectorsParams,
   DescribeIndexParams,
   DeleteIndexParams,
 } from '@mastra/core/vector';
@@ -57,7 +58,7 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
   private isConnected = false;
 
   constructor(config?: SurrealVectorConfig) {
-    super();
+    super({ id: 'surreal-vector' });
     this.db = new Surreal();
     this.config = {
       ...loadConfigFromEnv(),
@@ -387,14 +388,9 @@ export class SurrealVector extends MastraVector<SurrealVectorFilter> {
   }
 
   /**
-   * Delete multiple vectors by IDs or filter (SurrealDB-specific extension)
-   * Note: Not part of MastraVector abstract interface
+   * Delete multiple vectors by IDs or filter
    */
-  async deleteVectors(params: {
-    indexName: string;
-    ids?: string[];
-    filter?: SurrealVectorFilter;
-  }): Promise<void> {
+  async deleteVectors(params: DeleteVectorsParams<SurrealVectorFilter>): Promise<void> {
     await this.init();
     const { indexName, ids, filter } = params;
     const tableName = this.getTableName(indexName);

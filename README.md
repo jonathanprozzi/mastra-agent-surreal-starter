@@ -9,7 +9,8 @@ This is a lightweight Mastra agent starter with SurrealDB as the agent's store t
 
 ## Features
 
-- **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraStorage` with domain classes (matches official Mastra store patterns)
+- **Mastra v1 Compatible** — Built for Mastra v1.0+ with subpath imports and domain-based storage
+- **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraCompositeStore` with domain classes (matches official Mastra store patterns)
 - **SurrealDB Vector Store** — `SurrealVector` extends `MastraVector` with native HNSW indexing
 - **Cross-Thread Semantic Recall** — Agent recalls information across different conversation threads via `scope: 'resource'`
 - **Working Memory** — Persistent user context and preferences across sessions
@@ -101,8 +102,12 @@ import { SurrealStore } from "./src/mastra/storage";
 const store = new SurrealStore();
 await store.init();
 
-// Save a thread (MastraStorage interface)
-const thread = await store.saveThread({
+// Get domain stores (v1 API)
+const memory = await store.getStore('memory');
+const workflows = await store.getStore('workflows');
+
+// Save a thread
+const thread = await memory.saveThread({
   thread: {
     id: "thread-1",
     resourceId: "user-123",
@@ -114,24 +119,24 @@ const thread = await store.saveThread({
 });
 
 // Save messages
-await store.saveMessages({
+await memory.saveMessages({
   messages: [
     {
       id: "msg-1",
       threadId: "thread-1",
       role: "user",
-      content: "Hello!",
+      content: [{ type: "text", text: "Hello!" }],
       createdAt: new Date(),
       type: "text",
     },
   ],
 });
 
-// Get messages from a thread
-const messages = await store.getMessages({ threadId: "thread-1" });
+// List messages from a thread
+const { messages } = await memory.listMessages({ threadId: "thread-1" });
 
 // Save resource (working memory)
-await store.saveResource({
+await memory.saveResource({
   resource: {
     id: "user-123",
     workingMemory: JSON.stringify({ theme: "dark" }),
@@ -203,6 +208,11 @@ This test:
 3. Verifies the agent recalls lasagna from Thread 1 while in Thread 2
 
 This works because memory is configured with `scope: 'resource'` — the agent searches across all threads for a given user, not just the current thread.
+
+**Note on Mastra v1 Memory Defaults:**
+- Semantic recall is **disabled by default** in v1 (must opt-in via `semanticRecall` config)
+- Default `lastMessages` is 10 (can be increased)
+- This project explicitly enables semantic recall for cross-thread knowledge retrieval
 
 ### Full Semantic Recall Demo
 
@@ -277,7 +287,7 @@ If running alongside other projects:
 
 ## Architecture
 
-The `SurrealStore` class extends `MastraStorage` from `@mastra/core/storage`, providing a SurrealDB-backed implementation of all storage operations. This follows the same pattern as official Mastra stores:
+The `SurrealStore` class extends `MastraCompositeStore` from `@mastra/core/storage`, providing a SurrealDB-backed implementation of all storage operations. This follows the same pattern as official Mastra stores:
 
 - **PostgresStore** (`@mastra/pg`) - Uses domain classes (MemoryPG, WorkflowsPG, etc.)
 - **LibSQLStore** (`@mastra/libsql`) - SQLite-compatible with WAL mode
