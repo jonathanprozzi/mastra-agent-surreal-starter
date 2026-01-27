@@ -26,6 +26,7 @@ import {
   type BatchUpdateSpansArgs,
   type BatchDeleteTracesArgs,
 } from '@mastra/core/storage';
+import { ensureDate } from '../shared/utils';
 
 export class ObservabilitySurreal extends ObservabilityStorage {
   constructor(private db: Surreal) {
@@ -62,15 +63,48 @@ export class ObservabilitySurreal extends ObservabilityStorage {
    * Update a span with partial data
    */
   async updateSpan(args: UpdateSpanArgs): Promise<void> {
-    const { traceId, spanId, span } = args;
+    const { traceId, spanId, updates } = args;
+    const updateFields: string[] = ['updatedAt = time::now()'];
+    const params: Record<string, unknown> = { traceId, spanId };
+
+    const setField = (field: string, value: unknown) => {
+      if (value !== undefined) {
+        updateFields.push(`${field} = $${field}`);
+        params[field] = value;
+      }
+    };
+
+    setField('error', updates.error);
+    setField('runId', updates.runId);
+    setField('input', updates.input);
+    setField('threadId', updates.threadId);
+    setField('resourceId', updates.resourceId);
+    setField('metadata', updates.metadata);
+    setField('source', updates.source);
+    setField('output', updates.output);
+    setField('name', updates.name);
+    setField('entityType', updates.entityType);
+    setField('entityId', updates.entityId);
+    setField('links', updates.links);
+    setField('endedAt', updates.endedAt);
+    setField('startedAt', updates.startedAt);
+    setField('spanType', updates.spanType);
+    setField('isEvent', updates.isEvent);
+    setField('parentSpanId', updates.parentSpanId);
+    setField('attributes', updates.attributes);
+    setField('entityName', updates.entityName);
+    setField('userId', updates.userId);
+    setField('organizationId', updates.organizationId);
+    setField('sessionId', updates.sessionId);
+    setField('requestId', updates.requestId);
+    setField('environment', updates.environment);
+    setField('serviceName', updates.serviceName);
+    setField('scope', updates.scope);
+    setField('tags', updates.tags);
+
     await this.db.query(
-      `UPDATE ${TABLE_SPANS} SET
-        output = $output,
-        error = $error,
-        endedAt = $endedAt,
-        updatedAt = time::now()
-      WHERE traceId = $traceId AND spanId = $spanId`,
-      { traceId, spanId, ...span }
+      `UPDATE ${TABLE_SPANS} SET ${updateFields.join(', ')} WHERE traceId = $traceId AND spanId = $spanId`,
+      params
     );
   }
 
@@ -83,7 +117,8 @@ export class ObservabilitySurreal extends ObservabilityStorage {
       `SELECT * FROM ${TABLE_SPANS} WHERE traceId = $traceId AND spanId = $spanId LIMIT 1`,
       { traceId, spanId }
     );
-    return results[0]?.[0] || null;
+    const span = results[0]?.[0];
+    return span ? this.normalizeSpan(span) : null;
   }
 
   /**
@@ -95,7 +130,8 @@ export class ObservabilitySurreal extends ObservabilityStorage {
       `SELECT * FROM ${TABLE_SPANS} WHERE traceId = $traceId AND parentSpanId = NONE LIMIT 1`,
       { traceId }
     );
-    return results[0]?.[0] || null;
+    const span = results[0]?.[0];
+    return span ? this.normalizeSpan(span) : null;
   }
 
   /**
@@ -109,12 +145,9 @@ export class ObservabilitySurreal extends ObservabilityStorage {
     );
     const spans = results[0] || [];
     if (spans.length === 0) return null;
-
-    const rootSpan = spans.find(s => !s.parentSpanId);
     return {
       traceId,
-      spans,
-      rootSpan: rootSpan || null,
+      spans: spans.map(span => this.normalizeSpan(span)),
     };
   }
 
@@ -122,74 +155,140 @@ export class ObservabilitySurreal extends ObservabilityStorage {
    * List traces with optional filtering
    */
   async listTraces(args: ListTracesArgs): Promise<ListTracesResponse> {
-    const {
-      page = 0,
-      perPage = 50,
-      name,
-      entityType,
-      entityId,
-      fromDate,
-      toDate,
-      status,
-    } = args;
+    const filters = args?.filters ?? {};
+    const pagination = args?.pagination ?? {};
+    const orderBy = args?.orderBy ?? {};
 
-    const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
-    const offset = page * (perPage === false ? 0 : perPage);
+    const page = pagination.page ?? 0;
+    const perPage = pagination.perPage ?? 50;
+    const limit = perPage;
+    const offset = page * perPage;
 
-    // Get distinct traces by querying root spans
-    let query = `SELECT * FROM ${TABLE_SPANS} WHERE parentSpanId = NONE`;
-    const params: Record<string, any> = { limit, offset };
+    const where: string[] = ['parentSpanId = NONE'];
+    const params: Record<string, any> = {};
 
-    if (name) {
-      query += ' AND name = $name';
-      params.name = name;
-    }
-    if (entityType) {
-      query += ' AND entityType = $entityType';
-      params.entityType = entityType;
-    }
-    if (entityId) {
-      query += ' AND entityId = $entityId';
-      params.entityId = entityId;
-    }
-    if (fromDate) {
-      query += ' AND startedAt >= $fromDate';
-      params.fromDate = fromDate;
-    }
-    if (toDate) {
-      query += ' AND startedAt <= $toDate';
-      params.toDate = toDate;
-    }
-    if (status) {
-      // Map status to span state
-      if (status === 'error') {
-        query += ' AND error != NONE';
-      } else if (status === 'success') {
-        query += ' AND error = NONE AND endedAt != NONE';
-      } else if (status === 'running') {
-        query += ' AND endedAt = NONE';
+    const addEquality = (field: string, value: unknown) => {
+      if (value !== undefined) {
+        where.push(`${field} = $${field}`);
+        params[field] = value;
+      }
+    };
+
+    addEquality('entityType', filters.entityType);
+    addEquality('entityId', filters.entityId);
+    addEquality('entityName', filters.entityName);
+    addEquality('userId', filters.userId);
+    addEquality('organizationId', filters.organizationId);
+    addEquality('resourceId', filters.resourceId);
+    addEquality('runId', filters.runId);
+    addEquality('sessionId', filters.sessionId);
+    addEquality('threadId', filters.threadId);
+    addEquality('requestId', filters.requestId);
+    addEquality('environment', filters.environment);
+    addEquality('source', filters.source);
+    addEquality('serviceName', filters.serviceName);
+    addEquality('spanType', filters.spanType);
+
+    if (filters.metadata) {
+      this.validateObjectFilterKeys(filters.metadata, 'metadata');
+      for (const [key, value] of Object.entries(filters.metadata)) {
+        const paramKey = `metadata_${key}`;
+        where.push(`metadata.${key} = $${paramKey}`);
+        params[paramKey] = value;
       }
     }
 
-    query += ' ORDER BY startedAt DESC LIMIT $limit START $offset';
+    if (filters.scope) {
+      this.validateObjectFilterKeys(filters.scope, 'scope');
+      for (const [key, value] of Object.entries(filters.scope)) {
+        const paramKey = `scope_${key}`;
+        where.push(`scope.${key} = $${paramKey}`);
+        params[paramKey] = value;
+      }
+    }
 
-    const results = await this.db.query<[any[]]>(query, params);
-    const rootSpans = results[0] || [];
+    if (filters.tags && filters.tags.length > 0) {
+      filters.tags.forEach((tag, idx) => {
+        const paramKey = `tag_${idx}`;
+        where.push(`tags CONTAINS $${paramKey}`);
+        params[paramKey] = tag;
+      });
+    }
 
-    // Build traces from root spans
-    const traces = rootSpans.map(rootSpan => ({
-      traceId: rootSpan.traceId,
-      rootSpan,
-      spans: [rootSpan], // Just the root span for listing
-    }));
+    const applyDateRange = (
+      field: string,
+      range?: {
+        start?: Date;
+        end?: Date;
+        startExclusive?: boolean;
+        endExclusive?: boolean;
+      }
+    ) => {
+      if (!range) return;
+      if (range.start) {
+        const op = range.startExclusive ? '>' : '>=';
+        const paramKey = `${field}_start`;
+        where.push(`${field} ${op} $${paramKey}`);
+        params[paramKey] = range.start;
+      }
+      if (range.end) {
+        const op = range.endExclusive ? '<' : '<=';
+        const paramKey = `${field}_end`;
+        where.push(`${field} ${op} $${paramKey}`);
+        params[paramKey] = range.end;
+      }
+    };
+
+    applyDateRange('startedAt', filters.startedAt);
+    applyDateRange('endedAt', filters.endedAt);
+
+    if (filters.status) {
+      if (filters.status === 'error') {
+        where.push('error != NONE');
+      } else if (filters.status === 'success') {
+        where.push('error = NONE');
+        where.push('endedAt != NONE');
+      } else if (filters.status === 'running') {
+        where.push('endedAt = NONE');
+      }
+    }
+
+    if (filters.hasChildError === true) {
+      where.push(
+        `traceId IN (SELECT traceId FROM ${TABLE_SPANS} WHERE error != NONE AND parentSpanId != NONE)`
+      );
+    } else if (filters.hasChildError === false) {
+      where.push(
+        `traceId NOT IN (SELECT traceId FROM ${TABLE_SPANS} WHERE error != NONE AND parentSpanId != NONE)`
+      );
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const orderFieldInput = orderBy.field ?? 'startedAt';
+    const orderField = orderFieldInput === 'endedAt' ? 'endedAt' : 'startedAt';
+    const orderDirectionInput = orderBy.direction ?? 'DESC';
+    const orderDirection = orderDirectionInput === 'ASC' ? 'ASC' : 'DESC';
+
+    const countParams = { ...params };
+    const countResults = await this.db.query<[{ count: number }[]]>(
+      `SELECT count() as count FROM ${TABLE_SPANS} ${whereClause} GROUP ALL`,
+      countParams
+    );
+    const total = countResults[0]?.[0]?.count || 0;
+
+    const results = await this.db.query<[any[]]>(
+      `SELECT * FROM ${TABLE_SPANS} ${whereClause} ORDER BY ${orderField} ${orderDirection} LIMIT $limit START $offset`,
+      { ...params, limit, offset }
+    );
+    const spans = (results[0] || []).map(span => this.normalizeSpan(span));
 
     return {
-      traces,
+      spans,
       pagination: {
+        total,
         page,
-        perPage: perPage === false ? false : perPage,
-        total: traces.length,
-        hasMore: perPage !== false && traces.length === perPage,
+        perPage,
+        hasMore: offset + spans.length < total,
       },
     };
   }
@@ -199,7 +298,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
    */
   async batchCreateSpans(args: BatchCreateSpansArgs): Promise<void> {
     const now = new Date();
-    for (const span of args.spans) {
+    for (const span of args.records) {
       await this.db.create(TABLE_SPANS, {
         ...span,
         createdAt: now,
@@ -212,7 +311,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
    * Batch update multiple spans
    */
   async batchUpdateSpans(args: BatchUpdateSpansArgs): Promise<void> {
-    for (const update of args.spans) {
+    for (const update of args.records) {
       await this.updateSpan(update);
     }
   }
@@ -223,6 +322,24 @@ export class ObservabilitySurreal extends ObservabilityStorage {
   async batchDeleteTraces(args: BatchDeleteTracesArgs): Promise<void> {
     for (const traceId of args.traceIds) {
       await this.db.query(`DELETE FROM ${TABLE_SPANS} WHERE traceId = $traceId`, { traceId });
+    }
+  }
+
+  private normalizeSpan(span: any): any {
+    return {
+      ...span,
+      createdAt: ensureDate(span.createdAt) || new Date(),
+      updatedAt: ensureDate(span.updatedAt),
+      startedAt: ensureDate(span.startedAt) || new Date(),
+      endedAt: ensureDate(span.endedAt),
+    };
+  }
+
+  private validateObjectFilterKeys(record: Record<string, unknown>, label: string): void {
+    for (const key of Object.keys(record)) {
+      if (!/^[A-Za-z0-9_]+$/.test(key)) {
+        throw new Error(`${label} keys must contain only letters, numbers, or underscore`);
+      }
     }
   }
 }
