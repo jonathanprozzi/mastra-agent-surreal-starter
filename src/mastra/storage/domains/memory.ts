@@ -13,6 +13,9 @@ import type {
   StorageListMessagesOutput,
   StorageListThreadsInput,
   StorageListThreadsOutput,
+  StorageCloneThreadInput,
+  StorageCloneThreadOutput,
+  ThreadCloneMetadata,
   PaginationInfo,
 } from '@mastra/core/storage';
 import type { StorageThreadType } from '@mastra/core/memory';
@@ -62,6 +65,8 @@ export class MemorySurreal extends MemoryStorage {
       orderBy,
       filter,
     } = args;
+
+    this.validatePaginationInput(page, perPage);
 
     const { field, direction } = this.parseOrderBy(orderBy);
     const offset = page * (perPage === false ? 0 : perPage);
@@ -180,6 +185,7 @@ export class MemorySurreal extends MemoryStorage {
   async listMessages(args: StorageListMessagesInput): Promise<StorageListMessagesOutput> {
     const {
       threadId,
+      resourceId,
       include,
       perPage = 40,
       page = 0,
@@ -187,27 +193,28 @@ export class MemorySurreal extends MemoryStorage {
       orderBy,
     } = args;
 
-    // Handle include for cross-thread semantic recall
-    if (include && include.length > 0) {
-      const messages = await this.getMessagesWithContext(include);
-      return {
-        messages,
-        page: 0,
-        perPage: messages.length,
-        total: messages.length,
-        hasMore: false,
-      };
-    }
+    this.validatePaginationInput(page, perPage);
 
-    const { field, direction } = this.parseOrderBy(orderBy);
+    const { field, direction } = this.parseOrderBy(orderBy, 'ASC');
     const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
     const offset = page * (perPage === false ? 0 : perPage);
 
     // Handle array of threadIds
-    const threadIds = Array.isArray(threadId) ? threadId : [threadId];
+    const threadIds = (Array.isArray(threadId) ? threadId : [threadId]).filter(
+      (id): id is string => typeof id === 'string' && id.trim().length > 0
+    );
+
+    if (threadIds.length === 0) {
+      throw new Error('threadId must be a non-empty string or array of non-empty strings');
+    }
 
     let query = 'SELECT * FROM mastra_messages WHERE threadId IN $threadIds';
     const params: Record<string, any> = { threadIds, limit, offset };
+
+    if (resourceId) {
+      query += ' AND resourceId = $resourceId';
+      params.resourceId = resourceId;
+    }
 
     if (filter?.dateRange) {
       if (filter.dateRange.start) {
@@ -233,9 +240,43 @@ export class MemorySurreal extends MemoryStorage {
     }));
 
     // Get total count
-    let countQuery = 'SELECT count() as count FROM mastra_messages WHERE threadId IN $threadIds GROUP ALL';
-    const countResults = await this.db.query<[{ count: number }[]]>(countQuery, { threadIds });
+    let countQuery = 'SELECT count() as count FROM mastra_messages WHERE threadId IN $threadIds';
+    const countParams: Record<string, any> = { threadIds };
+    if (resourceId) {
+      countQuery += ' AND resourceId = $resourceId';
+      countParams.resourceId = resourceId;
+    }
+    if (filter?.dateRange) {
+      if (filter.dateRange.start) {
+        const op = filter.dateRange.startExclusive ? '>' : '>=';
+        countQuery += ` AND createdAt ${op} $startDate`;
+        countParams.startDate = filter.dateRange.start;
+      }
+      if (filter.dateRange.end) {
+        const op = filter.dateRange.endExclusive ? '<' : '<=';
+        countQuery += ` AND createdAt ${op} $endDate`;
+        countParams.endDate = filter.dateRange.end;
+      }
+    }
+    countQuery += ' GROUP ALL';
+    const countResults = await this.db.query<[{ count: number }[]]>(countQuery, countParams);
     const total = countResults[0]?.[0]?.count || 0;
+
+    // Merge in included messages for semantic recall
+    if (include && include.length > 0) {
+      const includeMessages = await this.getMessagesWithContext(include);
+      const seen = new Set(messages.map((m) => normalizeId(m.id)));
+      for (const msg of includeMessages) {
+        const msgId = normalizeId(msg.id);
+        if (!seen.has(msgId)) {
+          seen.add(msgId);
+          messages.push(msg);
+        }
+      }
+      messages.sort((a, b) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+    }
 
     return {
       messages,
@@ -366,25 +407,57 @@ export class MemorySurreal extends MemoryStorage {
     const { messages } = args;
     const saved: MastraDBMessage[] = [];
 
+    if (messages.length === 0) {
+      return { messages: [] };
+    }
+
+    const threadId = messages[0]?.threadId;
+    if (!threadId) {
+      throw new Error('Thread ID is required to save messages');
+    }
+
+    const thread = await this.getThreadById({ threadId });
+    if (!thread) {
+      throw new Error(`Thread ${threadId} not found`);
+    }
+
+    const now = new Date();
+
     for (const msg of messages) {
+      const messageResourceId = msg.resourceId || thread.resourceId;
+      if (!messageResourceId) {
+        throw new Error('Resource ID is required to save messages');
+      }
+
       const toSave = {
         ...msg,
-        createdAt: (msg as any).createdAt || new Date(),
+        resourceId: messageResourceId,
+        createdAt: (msg as any).createdAt || now,
       };
       await this.db.query(
         `INSERT INTO mastra_messages {
           id: $id,
           threadId: $threadId,
+          resourceId: $resourceId,
           role: $role,
           content: $content,
           type: $type,
           createdAt: $createdAt
         } ON DUPLICATE KEY UPDATE
+          threadId = $threadId,
+          resourceId = $resourceId,
+          role = $role,
+          type = $type,
           content = $content`,
         toSave
       );
       saved.push(toSave);
     }
+
+    await this.db.query(
+      'UPDATE type::thing("mastra_threads", $threadId) SET updatedAt = time::now()',
+      { threadId }
+    );
 
     return { messages: saved };
   }
@@ -417,6 +490,119 @@ export class MemorySurreal extends MemoryStorage {
     for (const messageId of messageIds) {
       await this.db.query('DELETE type::thing("mastra_messages", $messageId)', { messageId });
     }
+  }
+
+  async cloneThread(args: StorageCloneThreadInput): Promise<StorageCloneThreadOutput> {
+    const {
+      sourceThreadId,
+      newThreadId: providedThreadId,
+      resourceId,
+      title,
+      metadata,
+      options,
+    } = args;
+
+    const sourceThread = await this.getThreadById({ threadId: sourceThreadId });
+    if (!sourceThread) {
+      throw new Error(`Source thread with id ${sourceThreadId} not found`);
+    }
+
+    const newThreadId = providedThreadId || crypto.randomUUID();
+    const existingThread = await this.getThreadById({ threadId: newThreadId });
+    if (existingThread) {
+      throw new Error(`Thread with id ${newThreadId} already exists`);
+    }
+
+    let query = 'SELECT * FROM mastra_messages WHERE threadId = $threadId';
+    const params: Record<string, any> = { threadId: sourceThreadId };
+
+    if (options?.messageFilter?.startDate) {
+      query += ' AND createdAt >= $startDate';
+      params.startDate = options.messageFilter.startDate;
+    }
+    if (options?.messageFilter?.endDate) {
+      query += ' AND createdAt <= $endDate';
+      params.endDate = options.messageFilter.endDate;
+    }
+    if (options?.messageFilter?.messageIds && options.messageFilter.messageIds.length > 0) {
+      query += ' AND id IN $messageIds';
+      params.messageIds = options.messageFilter.messageIds;
+    }
+
+    const useLimit = typeof options?.messageLimit === 'number' && options.messageLimit > 0;
+    query += ` ORDER BY createdAt ${useLimit ? 'DESC' : 'ASC'}`;
+    if (useLimit) {
+      query += ' LIMIT $limit';
+      params.limit = options!.messageLimit!;
+    }
+
+    const results = await this.db.query<[any[]]>(query, params);
+    let sourceMessages = results[0] || [];
+    if (useLimit) {
+      sourceMessages = sourceMessages.reverse();
+    }
+
+    const now = new Date();
+    const lastMessageId =
+      sourceMessages.length > 0 ? normalizeId(sourceMessages[sourceMessages.length - 1]?.id) : undefined;
+
+    const cloneMetadata: ThreadCloneMetadata = {
+      sourceThreadId,
+      clonedAt: now,
+      ...(lastMessageId && { lastMessageId }),
+    };
+
+    const newThread: StorageThreadType = {
+      id: newThreadId,
+      resourceId: resourceId || sourceThread.resourceId,
+      title: title || (sourceThread.title ? `Clone of ${sourceThread.title}` : undefined),
+      metadata: {
+        ...(metadata || {}),
+        clone: cloneMetadata,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await this.saveThread({ thread: newThread });
+
+    const clonedMessages: MastraDBMessage[] = [];
+    const targetResourceId = resourceId || sourceThread.resourceId;
+
+    for (const msg of sourceMessages) {
+      const newMessageId = crypto.randomUUID();
+      const createdAt = ensureDate(msg.createdAt) || new Date();
+
+      const clonedMessage: MastraDBMessage = {
+        id: newMessageId,
+        threadId: newThreadId,
+        content: msg.content,
+        role: msg.role,
+        type: msg.type,
+        createdAt,
+        resourceId: targetResourceId,
+      };
+
+      await this.db.query(
+        `INSERT INTO mastra_messages {
+          id: $id,
+          threadId: $threadId,
+          resourceId: $resourceId,
+          role: $role,
+          content: $content,
+          type: $type,
+          createdAt: $createdAt
+        }`,
+        clonedMessage
+      );
+
+      clonedMessages.push(clonedMessage);
+    }
+
+    return {
+      thread: newThread,
+      clonedMessages,
+    };
   }
 
   // ============================================

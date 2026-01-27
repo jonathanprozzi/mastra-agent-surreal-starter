@@ -1,6 +1,6 @@
 # Mastra Agent SurrealDB Starter
 
-[![Node.js](https://img.shields.io/badge/Node.js->=20.9.0-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js->=22.13.0-green.svg)](https://nodejs.org/)
 [![SurrealDB](https://img.shields.io/badge/SurrealDB-v2.2-purple.svg)](https://surrealdb.com/)
 
 > **Community Project** - Built in collaboration with Claude Opus 4.5 to rapidly prototype [Mastra](https://mastra.ai) with SurrealDB, following established Mastra store patterns.
@@ -87,7 +87,7 @@ The adapter implements storage for all Mastra data types (9 tables):
 | `mastra_threads`           | Conversation threads              |
 | `mastra_messages`          | Messages with optional embeddings |
 | `mastra_workflow_snapshot` | Suspended workflow state          |
-| `mastra_traces`            | OpenTelemetry data                |
+| `mastra_ai_spans`          | Observability spans (traces)      |
 | `mastra_evals`             | Evaluation results                |
 | `mastra_scorers`           | Scorer definitions                |
 | `mastra_scores`            | Scoring run data                  |
@@ -155,7 +155,7 @@ await store.close();
 The `SurrealVector` class implements `MastraVector` for native HNSW vector search:
 
 ```typescript
-import { SurrealVector } from "./src/mastra/storage";
+import { SurrealVector } from "./src/mastra/vector";
 
 const vector = new SurrealVector();
 
@@ -233,7 +233,7 @@ This test:
 
 ```bash
 # SurrealDB Connection
-SURREALDB_URL=ws://localhost:8000
+SURREALDB_URL=http://localhost:8000
 SURREALDB_NS=mastra
 SURREALDB_DB=development
 SURREALDB_USER=root

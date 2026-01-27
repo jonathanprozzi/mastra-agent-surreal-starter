@@ -11,6 +11,7 @@
 import type Surreal from 'surrealdb';
 import {
   ObservabilityStorage,
+  TABLE_SPANS,
   type CreateSpanArgs,
   type UpdateSpanArgs,
   type GetSpanArgs,
@@ -32,8 +33,17 @@ export class ObservabilitySurreal extends ObservabilityStorage {
   }
 
   async dangerouslyClearAll(): Promise<void> {
-    await this.db.query('DELETE FROM mastra_spans');
-    await this.db.query('DELETE FROM mastra_traces');
+    await this.db.query(`DELETE FROM ${TABLE_SPANS}`);
+  }
+
+  public override get tracingStrategy(): {
+    preferred: 'batch-with-updates';
+    supported: ('batch-with-updates' | 'insert-only')[];
+  } {
+    return {
+      preferred: 'batch-with-updates',
+      supported: ['batch-with-updates', 'insert-only'],
+    };
   }
 
   /**
@@ -41,7 +51,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
    */
   async createSpan(args: CreateSpanArgs): Promise<void> {
     const now = new Date();
-    await this.db.create('mastra_spans', {
+    await this.db.create(TABLE_SPANS, {
       ...args.span,
       createdAt: now,
       updatedAt: now,
@@ -54,7 +64,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
   async updateSpan(args: UpdateSpanArgs): Promise<void> {
     const { traceId, spanId, span } = args;
     await this.db.query(
-      `UPDATE mastra_spans SET
+      `UPDATE ${TABLE_SPANS} SET
         output = $output,
         error = $error,
         endedAt = $endedAt,
@@ -70,7 +80,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
   async getSpan(args: GetSpanArgs): Promise<GetSpanResponse | null> {
     const { traceId, spanId } = args;
     const results = await this.db.query<[any[]]>(
-      'SELECT * FROM mastra_spans WHERE traceId = $traceId AND spanId = $spanId LIMIT 1',
+      `SELECT * FROM ${TABLE_SPANS} WHERE traceId = $traceId AND spanId = $spanId LIMIT 1`,
       { traceId, spanId }
     );
     return results[0]?.[0] || null;
@@ -82,7 +92,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
   async getRootSpan(args: GetRootSpanArgs): Promise<GetRootSpanResponse | null> {
     const { traceId } = args;
     const results = await this.db.query<[any[]]>(
-      'SELECT * FROM mastra_spans WHERE traceId = $traceId AND parentSpanId = NONE LIMIT 1',
+      `SELECT * FROM ${TABLE_SPANS} WHERE traceId = $traceId AND parentSpanId = NONE LIMIT 1`,
       { traceId }
     );
     return results[0]?.[0] || null;
@@ -94,7 +104,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
   async getTrace(args: GetTraceArgs): Promise<GetTraceResponse | null> {
     const { traceId } = args;
     const results = await this.db.query<[any[]]>(
-      'SELECT * FROM mastra_spans WHERE traceId = $traceId ORDER BY startedAt ASC',
+      `SELECT * FROM ${TABLE_SPANS} WHERE traceId = $traceId ORDER BY startedAt ASC`,
       { traceId }
     );
     const spans = results[0] || [];
@@ -127,7 +137,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
     const offset = page * (perPage === false ? 0 : perPage);
 
     // Get distinct traces by querying root spans
-    let query = 'SELECT * FROM mastra_spans WHERE parentSpanId = NONE';
+    let query = `SELECT * FROM ${TABLE_SPANS} WHERE parentSpanId = NONE`;
     const params: Record<string, any> = { limit, offset };
 
     if (name) {
@@ -190,7 +200,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
   async batchCreateSpans(args: BatchCreateSpansArgs): Promise<void> {
     const now = new Date();
     for (const span of args.spans) {
-      await this.db.create('mastra_spans', {
+      await this.db.create(TABLE_SPANS, {
         ...span,
         createdAt: now,
         updatedAt: now,
@@ -212,7 +222,7 @@ export class ObservabilitySurreal extends ObservabilityStorage {
    */
   async batchDeleteTraces(args: BatchDeleteTracesArgs): Promise<void> {
     for (const traceId of args.traceIds) {
-      await this.db.query('DELETE FROM mastra_spans WHERE traceId = $traceId', { traceId });
+      await this.db.query(`DELETE FROM ${TABLE_SPANS} WHERE traceId = $traceId`, { traceId });
     }
   }
 }
