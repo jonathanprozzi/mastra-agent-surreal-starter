@@ -22,6 +22,7 @@ import {
   ScoresSurreal,
   ObservabilitySurreal,
   AgentsSurreal,
+  OperationsSurreal,
 } from './domains';
 
 export interface SurrealStoreConfig {
@@ -46,6 +47,7 @@ export class SurrealStore extends MastraCompositeStore {
   private _scores!: ScoresSurreal;
   private _observability!: ObservabilitySurreal;
   private _agents!: AgentsSurreal;
+  private _operations!: OperationsSurreal;
 
   constructor(config?: SurrealStoreConfig) {
     super({
@@ -85,6 +87,7 @@ export class SurrealStore extends MastraCompositeStore {
     this._scores = new ScoresSurreal(this.db);
     this._observability = new ObservabilitySurreal(this.db);
     this._agents = new AgentsSurreal(this.db);
+    this._operations = new OperationsSurreal(this.db);
 
     // Initialize agents table
     await this._agents.init();
@@ -115,6 +118,15 @@ export class SurrealStore extends MastraCompositeStore {
   ): Promise<StorageDomains[K] | undefined> {
     await this.init();
     return this.stores?.[storeName];
+  }
+
+  /**
+   * Get the operations domain for low-level table operations.
+   * Note: Operations is not part of standard StorageDomains.
+   */
+  async getOperations(): Promise<OperationsSurreal> {
+    await this.init();
+    return this._operations;
   }
 }
 

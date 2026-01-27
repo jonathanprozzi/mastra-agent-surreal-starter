@@ -1,25 +1,32 @@
 /**
- * Integration Test Suite
+ * Integration Test Suite (Mastra v1 API)
  *
  * Tests the integration between SurrealStore and SurrealVector,
  * including cross-thread semantic recall functionality.
+ * Uses v1 domain-based API: store.getStore('memory'), store.getStore('workflows'), etc.
  *
  * Prerequisites:
  * - SurrealDB running: docker-compose up -d
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { SurrealStore } from '../src/mastra/storage';
+import { SurrealStore, MemorySurreal } from '../src/mastra/storage';
 import { SurrealVector } from '../src/mastra/vector';
 
 describe('Integration: Storage + Vector', () => {
   let store: SurrealStore;
+  let memory: MemorySurreal;
   let vector: SurrealVector;
 
   beforeAll(async () => {
     store = new SurrealStore({ database: 'test' });
     vector = new SurrealVector({ database: 'test' });
     await store.init();
+
+    // Get memory domain (v1 API)
+    const memoryDomain = await store.getStore('memory');
+    if (!memoryDomain) throw new Error('Memory domain not available');
+    memory = memoryDomain as MemorySurreal;
   });
 
   afterAll(async () => {
@@ -35,9 +42,9 @@ describe('Integration: Storage + Vector', () => {
     afterAll(async () => {
       // Cleanup
       try {
-        await store.deleteMessages(['int-msg-1', 'int-msg-2', 'int-msg-3', 'int-msg-4']);
-        await store.deleteThread({ threadId: thread1Id });
-        await store.deleteThread({ threadId: thread2Id });
+        await memory.deleteMessages(['int-msg-1', 'int-msg-2', 'int-msg-3', 'int-msg-4']);
+        await memory.deleteThread({ threadId: thread1Id });
+        await memory.deleteThread({ threadId: thread2Id });
       } catch {
         // Ignore
       }
@@ -45,7 +52,7 @@ describe('Integration: Storage + Vector', () => {
 
     it('should retrieve messages across threads for the same resource', async () => {
       // Create two threads for the same user
-      await store.saveThread({
+      await memory.saveThread({
         thread: {
           id: thread1Id,
           resourceId,
@@ -56,7 +63,7 @@ describe('Integration: Storage + Vector', () => {
         },
       });
 
-      await store.saveThread({
+      await memory.saveThread({
         thread: {
           id: thread2Id,
           resourceId,
@@ -68,13 +75,13 @@ describe('Integration: Storage + Vector', () => {
       });
 
       // Add messages to thread 1
-      await store.saveMessages({
+      await memory.saveMessages({
         messages: [
           {
             id: 'int-msg-1',
             threadId: thread1Id,
             role: 'user',
-            content: 'I love making lasagna with ricotta cheese',
+            content: [{ type: 'text', text: 'I love making lasagna with ricotta cheese' }],
             createdAt: new Date(),
             type: 'text',
           },
@@ -82,62 +89,60 @@ describe('Integration: Storage + Vector', () => {
             id: 'int-msg-2',
             threadId: thread1Id,
             role: 'assistant',
-            content: 'Lasagna is a great Italian dish!',
+            content: [{ type: 'text', text: 'Lasagna is a great Italian dish!' }],
             createdAt: new Date(Date.now() + 1000),
             type: 'text',
           },
-        ],
+        ] as any,
       });
 
       // Add messages to thread 2
-      await store.saveMessages({
+      await memory.saveMessages({
         messages: [
           {
             id: 'int-msg-3',
             threadId: thread2Id,
             role: 'user',
-            content: 'What did we discuss about cooking?',
+            content: [{ type: 'text', text: 'What did we discuss about cooking?' }],
             createdAt: new Date(Date.now() + 2000),
             type: 'text',
+          },
+        ] as any,
+      });
+
+      // Verify both threads belong to the same resource
+      const result = await memory.listThreads({ filter: { resourceId } });
+      expect(result.threads.length).toBeGreaterThanOrEqual(2);
+      expect(result.threads.some(t => t.id === thread1Id)).toBe(true);
+      expect(result.threads.some(t => t.id === thread2Id)).toBe(true);
+
+      // Verify messages are in their respective threads
+      const thread1Messages = await memory.listMessages({ threadId: thread1Id });
+      const thread2Messages = await memory.listMessages({ threadId: thread2Id });
+
+      expect(thread1Messages.messages.length).toBe(2);
+      expect(thread2Messages.messages.length).toBe(1);
+    });
+
+    it('should retrieve messages with context using include', async () => {
+      // This tests the listMessages with include functionality
+      // which is used by Mastra's semantic recall
+
+      const result = await memory.listMessages({
+        threadId: thread1Id,
+        include: [
+          {
+            id: 'int-msg-1',
+            threadId: thread1Id,
+            withPreviousMessages: 0,
+            withNextMessages: 1,
           },
         ],
       });
 
-      // Verify both threads belong to the same resource
-      const threads = await store.getThreadsByResourceId({ resourceId });
-      expect(threads.length).toBeGreaterThanOrEqual(2);
-      expect(threads.some(t => t.id === thread1Id)).toBe(true);
-      expect(threads.some(t => t.id === thread2Id)).toBe(true);
-
-      // Verify messages are in their respective threads
-      const thread1Messages = await store.getMessages({ threadId: thread1Id });
-      const thread2Messages = await store.getMessages({ threadId: thread2Id });
-
-      expect(thread1Messages.length).toBe(2);
-      expect(thread2Messages.length).toBe(1);
-    });
-
-    it('should retrieve messages with context using selectBy.include', async () => {
-      // This tests the getMessagesWithContext functionality
-      // which is used by Mastra's semantic recall
-
-      const messages = await store.getMessages({
-        threadId: thread1Id,
-        selectBy: {
-          include: [
-            {
-              id: 'int-msg-1',
-              threadId: thread1Id,
-              withPreviousMessages: 0,
-              withNextMessages: 1,
-            },
-          ],
-        },
-      });
-
       // Should get the message and its context
-      expect(messages.length).toBeGreaterThanOrEqual(1);
-      expect(messages.some(m => m.id === 'int-msg-1')).toBe(true);
+      expect(result.messages.length).toBeGreaterThanOrEqual(1);
+      expect(result.messages.some(m => m.id === 'int-msg-1')).toBe(true);
     });
   });
 
@@ -236,19 +241,19 @@ describe('Integration: Storage + Vector', () => {
 
       // Create all threads concurrently
       await Promise.all(
-        threads.map(thread => store.saveThread({ thread }))
+        threads.map(thread => memory.saveThread({ thread }))
       );
 
       // Verify all were created
-      const savedThreads = await store.getThreadsByResourceId({
-        resourceId: 'concurrent-user',
+      const result = await memory.listThreads({
+        filter: { resourceId: 'concurrent-user' },
       });
 
-      expect(savedThreads.length).toBeGreaterThanOrEqual(5);
+      expect(result.threads.length).toBeGreaterThanOrEqual(5);
 
       // Cleanup concurrently
       await Promise.all(
-        threads.map(t => store.deleteThread({ threadId: t.id }))
+        threads.map(t => memory.deleteThread({ threadId: t.id }))
       );
     });
 
@@ -287,18 +292,18 @@ describe('Integration: Storage + Vector', () => {
   describe('Error Handling', () => {
     // These tests create new connections and can overwhelm local SurrealDB
     it.skip('should handle non-existent thread gracefully', async () => {
-      const thread = await store.getThreadById({ threadId: 'does-not-exist' });
+      const thread = await memory.getThreadById({ threadId: 'does-not-exist' });
       expect(thread).toBeNull();
     });
 
     it.skip('should handle non-existent resource gracefully', async () => {
-      const resource = await store.getResourceById({ resourceId: 'does-not-exist' });
+      const resource = await memory.getResourceById({ resourceId: 'does-not-exist' });
       expect(resource).toBeNull();
     });
 
     it('should handle empty message list', async () => {
-      const result = await store.saveMessages({ messages: [] });
-      expect(result).toEqual([]);
+      const result = await memory.saveMessages({ messages: [] });
+      expect(result.messages).toEqual([]);
     });
 
     it.skip('should handle query on empty vector index', async () => {
@@ -326,10 +331,15 @@ describe('Integration: Storage + Vector', () => {
 
 describe('Shared Connection Behavior', () => {
   let testStore: SurrealStore;
+  let memory: MemorySurreal;
 
   beforeAll(async () => {
     testStore = new SurrealStore({ database: 'test' });
     await testStore.init();
+
+    const memoryDomain = await testStore.getStore('memory');
+    if (!memoryDomain) throw new Error('Memory domain not available');
+    memory = memoryDomain as MemorySurreal;
   });
 
   afterAll(async () => {
@@ -338,14 +348,14 @@ describe('Shared Connection Behavior', () => {
 
   it('should allow multiple init() calls without error', async () => {
     // Just verify it's connected by doing a simple operation
-    const thread = await testStore.getThreadById({ threadId: 'nonexistent' });
+    const thread = await memory.getThreadById({ threadId: 'nonexistent' });
     expect(thread).toBeNull(); // Should work without error
   });
 
   it('should handle idempotent operations', async () => {
     // Test that we can call operations multiple times
-    const result1 = await testStore.getThreadById({ threadId: 'test-1' });
-    const result2 = await testStore.getThreadById({ threadId: 'test-1' });
+    const result1 = await memory.getThreadById({ threadId: 'test-1' });
+    const result2 = await memory.getThreadById({ threadId: 'test-1' });
     // Both should return the same result (null in this case)
     expect(result1).toEqual(result2);
   });

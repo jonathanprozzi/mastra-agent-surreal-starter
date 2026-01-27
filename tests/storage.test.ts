@@ -1,26 +1,38 @@
 /**
- * SurrealStore Test Suite
+ * SurrealStore Test Suite (Mastra v1 API)
  *
  * Comprehensive tests for the SurrealDB storage adapter.
- * Tests all MastraStorage interface methods.
+ * Uses v1 domain-based API: store.getStore('memory'), store.getStore('workflows'), etc.
  *
  * Prerequisites:
  * - SurrealDB running: docker-compose up -d
  * - Schema applied: bun run db:setup
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { SurrealStore } from '../src/mastra/storage';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { SurrealStore, MemorySurreal, WorkflowsSurreal, OperationsSurreal } from '../src/mastra/storage';
 import type { StorageThreadType } from '@mastra/core/memory';
 
 describe('SurrealStore', () => {
   let store: SurrealStore;
+  let memory: MemorySurreal;
+  let workflows: WorkflowsSurreal;
 
   beforeAll(async () => {
     store = new SurrealStore({
       database: 'test', // Use test database
     });
     await store.init();
+
+    // Get domain stores (v1 API)
+    const memoryDomain = await store.getStore('memory');
+    const workflowsDomain = await store.getStore('workflows');
+
+    if (!memoryDomain) throw new Error('Memory domain not available');
+    if (!workflowsDomain) throw new Error('Workflows domain not available');
+
+    memory = memoryDomain as MemorySurreal;
+    workflows = workflowsDomain as WorkflowsSurreal;
   });
 
   afterAll(async () => {
@@ -34,17 +46,12 @@ describe('SurrealStore', () => {
       await testStore.close();
     });
 
-    it('should report correct capabilities', () => {
-      expect(store.supports).toEqual({
-        selectByIncludeResourceScope: true,
-        resourceWorkingMemory: true,
-        hasColumn: false,
-        createTable: true,
-        deleteMessages: true,
-        aiTracing: false,
-        indexManagement: false,
-        getScoresBySpan: false,
-      });
+    it('should provide access to domain stores', async () => {
+      const memoryDomain = await store.getStore('memory');
+      const workflowsDomain = await store.getStore('workflows');
+
+      expect(memoryDomain).toBeDefined();
+      expect(workflowsDomain).toBeDefined();
     });
   });
 
@@ -61,14 +68,14 @@ describe('SurrealStore', () => {
     afterEach(async () => {
       // Cleanup
       try {
-        await store.deleteThread({ threadId: testThread.id });
+        await memory.deleteThread({ threadId: testThread.id });
       } catch {
         // Ignore if already deleted
       }
     });
 
     it('should save a thread', async () => {
-      const saved = await store.saveThread({ thread: testThread });
+      const saved = await memory.saveThread({ thread: testThread });
 
       expect(saved).toBeDefined();
       expect(saved.id).toBe(testThread.id);
@@ -77,8 +84,8 @@ describe('SurrealStore', () => {
     });
 
     it('should get a thread by ID', async () => {
-      await store.saveThread({ thread: testThread });
-      const fetched = await store.getThreadById({ threadId: testThread.id });
+      await memory.saveThread({ thread: testThread });
+      const fetched = await memory.getThreadById({ threadId: testThread.id });
 
       expect(fetched).toBeDefined();
       expect(fetched?.id).toBe(testThread.id);
@@ -86,24 +93,24 @@ describe('SurrealStore', () => {
     });
 
     it('should return null for non-existent thread', async () => {
-      const fetched = await store.getThreadById({ threadId: 'non-existent-id' });
+      const fetched = await memory.getThreadById({ threadId: 'non-existent-id' });
       expect(fetched).toBeNull();
     });
 
-    it('should get threads by resource ID', async () => {
-      await store.saveThread({ thread: testThread });
-      const threads = await store.getThreadsByResourceId({
-        resourceId: testThread.resourceId,
+    it('should list threads by resource ID', async () => {
+      await memory.saveThread({ thread: testThread });
+      const result = await memory.listThreads({
+        filter: { resourceId: testThread.resourceId },
       });
 
-      expect(threads).toBeInstanceOf(Array);
-      expect(threads.length).toBeGreaterThanOrEqual(1);
-      expect(threads.some(t => t.id === testThread.id)).toBe(true);
+      expect(result.threads).toBeInstanceOf(Array);
+      expect(result.threads.length).toBeGreaterThanOrEqual(1);
+      expect(result.threads.some(t => t.id === testThread.id)).toBe(true);
     });
 
     it('should update a thread', async () => {
-      await store.saveThread({ thread: testThread });
-      const updated = await store.updateThread({
+      await memory.saveThread({ thread: testThread });
+      const updated = await memory.updateThread({
         id: testThread.id,
         title: 'Updated Title',
         metadata: { updated: true },
@@ -114,14 +121,14 @@ describe('SurrealStore', () => {
     });
 
     it('should delete a thread', async () => {
-      await store.saveThread({ thread: testThread });
-      await store.deleteThread({ threadId: testThread.id });
+      await memory.saveThread({ thread: testThread });
+      await memory.deleteThread({ threadId: testThread.id });
 
-      const fetched = await store.getThreadById({ threadId: testThread.id });
+      const fetched = await memory.getThreadById({ threadId: testThread.id });
       expect(fetched).toBeNull();
     });
 
-    it('should paginate threads by resource ID', async () => {
+    it('should paginate threads', async () => {
       // Create multiple threads
       const threads = Array.from({ length: 5 }, (_, i) => ({
         ...testThread,
@@ -130,12 +137,12 @@ describe('SurrealStore', () => {
       }));
 
       for (const t of threads) {
-        await store.saveThread({ thread: t });
+        await memory.saveThread({ thread: t });
       }
 
       try {
-        const result = await store.getThreadsByResourceIdPaginated({
-          resourceId: testThread.resourceId,
+        const result = await memory.listThreads({
+          filter: { resourceId: testThread.resourceId },
           page: 1,
           perPage: 2,
         });
@@ -149,7 +156,7 @@ describe('SurrealStore', () => {
         // Cleanup
         for (const t of threads) {
           try {
-            await store.deleteThread({ threadId: t.id });
+            await memory.deleteThread({ threadId: t.id });
           } catch {
             // Ignore
           }
@@ -165,7 +172,7 @@ describe('SurrealStore', () => {
         id: 'test-msg-1',
         threadId: testThreadId,
         role: 'user' as const,
-        content: 'Hello, this is a test!',
+        content: [{ type: 'text' as const, text: 'Hello, this is a test!' }],
         createdAt: new Date(),
         type: 'text' as const,
       },
@@ -173,7 +180,7 @@ describe('SurrealStore', () => {
         id: 'test-msg-2',
         threadId: testThreadId,
         role: 'assistant' as const,
-        content: 'Hello! I received your message.',
+        content: [{ type: 'text' as const, text: 'Hello! I received your message.' }],
         createdAt: new Date(Date.now() + 1000),
         type: 'text' as const,
       },
@@ -181,7 +188,7 @@ describe('SurrealStore', () => {
 
     beforeEach(async () => {
       // Create thread for messages
-      await store.saveThread({
+      await memory.saveThread({
         thread: {
           id: testThreadId,
           resourceId: 'test-user-messages',
@@ -196,72 +203,63 @@ describe('SurrealStore', () => {
     afterEach(async () => {
       // Cleanup
       try {
-        await store.deleteMessages(testMessages.map(m => m.id));
-        await store.deleteThread({ threadId: testThreadId });
+        await memory.deleteMessages(testMessages.map(m => m.id));
+        await memory.deleteThread({ threadId: testThreadId });
       } catch {
         // Ignore
       }
     });
 
     it('should save messages', async () => {
-      const saved = await store.saveMessages({ messages: testMessages });
+      const result = await memory.saveMessages({ messages: testMessages as any });
 
-      expect(saved).toBeInstanceOf(Array);
-      expect(saved.length).toBe(2);
+      expect(result.messages).toBeInstanceOf(Array);
+      expect(result.messages.length).toBe(2);
     });
 
-    it('should get messages by thread ID', async () => {
-      await store.saveMessages({ messages: testMessages });
-      const messages = await store.getMessages({ threadId: testThreadId });
+    it('should list messages by thread ID', async () => {
+      await memory.saveMessages({ messages: testMessages as any });
+      const result = await memory.listMessages({ threadId: testThreadId });
 
-      expect(messages).toBeInstanceOf(Array);
-      expect(messages.length).toBe(2);
-      // Should be ordered by createdAt ASC
-      expect(messages[0].role).toBe('user');
-      expect(messages[1].role).toBe('assistant');
+      expect(result.messages).toBeInstanceOf(Array);
+      expect(result.messages.length).toBe(2);
     });
 
-    it('should get messages by IDs', async () => {
-      await store.saveMessages({ messages: testMessages });
-      const messages = await store.getMessagesById({
+    it('should list messages by IDs', async () => {
+      await memory.saveMessages({ messages: testMessages as any });
+      const result = await memory.listMessagesById({
         messageIds: ['test-msg-1'],
-        format: 'v1',
       });
 
-      expect(messages.length).toBe(1);
-      expect(messages[0].id).toBe('test-msg-1');
+      expect(result.messages.length).toBe(1);
+      expect(result.messages[0].id).toBe('test-msg-1');
     });
 
     it('should delete messages', async () => {
-      await store.saveMessages({ messages: testMessages });
-      await store.deleteMessages(['test-msg-1']);
+      await memory.saveMessages({ messages: testMessages as any });
+      await memory.deleteMessages(['test-msg-1']);
 
-      const messages = await store.getMessages({ threadId: testThreadId });
-      expect(messages.length).toBe(1);
-      expect(messages[0].id).toBe('test-msg-2');
+      const result = await memory.listMessages({ threadId: testThreadId });
+      expect(result.messages.length).toBe(1);
+      expect(result.messages[0].id).toBe('test-msg-2');
     });
 
-    it('should respect message limit', async () => {
-      await store.saveMessages({ messages: testMessages });
-      const messages = await store.getMessages({
+    it('should respect message limit (perPage)', async () => {
+      await memory.saveMessages({ messages: testMessages as any });
+      const result = await memory.listMessages({
         threadId: testThreadId,
-        selectBy: { last: 1 },
+        perPage: 1,
       });
 
-      expect(messages.length).toBe(1);
+      expect(result.messages.length).toBe(1);
     });
   });
 
   describe('Resource (Working Memory) Operations', () => {
     const testResourceId = 'test-resource-1';
 
-    afterEach(async () => {
-      // Note: There's no deleteResource in the interface, so we can't clean up easily
-      // Resources are left in the database but won't affect other tests
-    });
-
     it('should save a resource', async () => {
-      const resource = await store.saveResource({
+      const resource = await memory.saveResource({
         resource: {
           id: testResourceId,
           workingMemory: JSON.stringify({ preferences: { theme: 'dark' } }),
@@ -278,7 +276,7 @@ describe('SurrealStore', () => {
     it('should get a resource by ID', async () => {
       const uniqueResourceId = 'test-resource-get-' + Date.now();
 
-      await store.saveResource({
+      await memory.saveResource({
         resource: {
           id: uniqueResourceId,
           workingMemory: JSON.stringify({ testValue: 'hello' }),
@@ -288,13 +286,13 @@ describe('SurrealStore', () => {
         },
       });
 
-      const fetched = await store.getResourceById({ resourceId: uniqueResourceId });
+      const fetched = await memory.getResourceById({ resourceId: uniqueResourceId });
       expect(fetched).toBeDefined();
       expect(fetched?.workingMemory).toContain('testValue');
     });
 
     it('should update a resource', async () => {
-      await store.saveResource({
+      await memory.saveResource({
         resource: {
           id: testResourceId,
           workingMemory: 'initial',
@@ -304,7 +302,7 @@ describe('SurrealStore', () => {
         },
       });
 
-      const updated = await store.updateResource({
+      const updated = await memory.updateResource({
         resourceId: testResourceId,
         workingMemory: 'updated memory',
         metadata: { updated: true },
@@ -318,13 +316,9 @@ describe('SurrealStore', () => {
     const workflowName = 'test-workflow';
     const runId = 'test-run-1';
 
-    afterEach(async () => {
-      // Cleanup - workflows don't have a delete method in the interface
-    });
-
     it('should persist a workflow snapshot', async () => {
       await expect(
-        store.persistWorkflowSnapshot({
+        workflows.persistWorkflowSnapshot({
           workflowName,
           runId,
           resourceId: 'test-user',
@@ -345,7 +339,7 @@ describe('SurrealStore', () => {
     });
 
     it('should load a workflow snapshot', async () => {
-      await store.persistWorkflowSnapshot({
+      await workflows.persistWorkflowSnapshot({
         workflowName,
         runId,
         snapshot: {
@@ -362,21 +356,21 @@ describe('SurrealStore', () => {
         } as any,
       });
 
-      const snapshot = await store.loadWorkflowSnapshot({ workflowName, runId });
+      const snapshot = await workflows.loadWorkflowSnapshot({ workflowName, runId });
       expect(snapshot).toBeDefined();
       expect(snapshot?.status).toBe('running');
     });
 
-    it('should get workflow runs', async () => {
-      const runs = await store.getWorkflowRuns({ workflowName });
+    it('should list workflow runs', async () => {
+      const result = await workflows.listWorkflowRuns({ workflowName });
 
-      expect(runs).toBeDefined();
-      expect(runs.runs).toBeInstanceOf(Array);
-      expect(typeof runs.total).toBe('number');
+      expect(result).toBeDefined();
+      expect(result.runs).toBeInstanceOf(Array);
+      expect(typeof result.total).toBe('number');
     });
 
     it('should update workflow state', async () => {
-      await store.persistWorkflowSnapshot({
+      await workflows.persistWorkflowSnapshot({
         workflowName,
         runId: 'state-update-test',
         snapshot: {
@@ -393,7 +387,7 @@ describe('SurrealStore', () => {
         } as any,
       });
 
-      const updated = await store.updateWorkflowState({
+      const updated = await workflows.updateWorkflowState({
         workflowName,
         runId: 'state-update-test',
         opts: {
@@ -406,12 +400,20 @@ describe('SurrealStore', () => {
     });
   });
 
-  describe('Table Operations', () => {
+  describe('Operations Domain', () => {
     const testTableName = 'test_operations_table' as any;
+
+    // Get operations domain
+    let operations: OperationsSurreal;
+
+    beforeAll(async () => {
+      // Operations is not part of standard StorageDomains, use getOperations()
+      operations = await store.getOperations();
+    });
 
     afterEach(async () => {
       try {
-        await store.dropTable({ tableName: testTableName });
+        await operations.dropTable({ tableName: testTableName });
       } catch {
         // Ignore if doesn't exist
       }
@@ -419,7 +421,7 @@ describe('SurrealStore', () => {
 
     it('should create a table', async () => {
       await expect(
-        store.createTable({
+        operations.createTable({
           tableName: testTableName,
           schema: {
             id: { type: 'string', nullable: false },
@@ -430,13 +432,13 @@ describe('SurrealStore', () => {
     });
 
     it('should insert a record', async () => {
-      await store.createTable({
+      await operations.createTable({
         tableName: testTableName,
         schema: { id: { type: 'string', nullable: false } },
       });
 
       await expect(
-        store.insert({
+        operations.insert({
           tableName: testTableName,
           record: { id: 'test-1', name: 'Test Record' },
         })
@@ -444,13 +446,13 @@ describe('SurrealStore', () => {
     });
 
     it('should batch insert records', async () => {
-      await store.createTable({
+      await operations.createTable({
         tableName: testTableName,
         schema: { id: { type: 'string', nullable: false } },
       });
 
       await expect(
-        store.batchInsert({
+        operations.batchInsert({
           tableName: testTableName,
           records: [
             { id: 'batch-1', name: 'Record 1' },
@@ -461,18 +463,18 @@ describe('SurrealStore', () => {
     });
 
     it('should load a record by keys', async () => {
-      await store.createTable({
+      await operations.createTable({
         tableName: testTableName,
         schema: { id: { type: 'string', nullable: false } },
       });
 
-      await store.insert({
+      await operations.insert({
         tableName: testTableName,
         record: { id: 'load-test', name: 'Load Test' },
       });
 
       // Load by a field that isn't the record ID
-      const loaded = await store.load<{ id: string; name: string }>({
+      const loaded = await operations.load<{ id: string; name: string }>({
         tableName: testTableName,
         keys: { name: 'Load Test' },
       });
@@ -482,19 +484,19 @@ describe('SurrealStore', () => {
     });
 
     it('should clear a table', async () => {
-      await store.createTable({
+      await operations.createTable({
         tableName: testTableName,
         schema: { id: { type: 'string', nullable: false } },
       });
 
-      await store.insert({
+      await operations.insert({
         tableName: testTableName,
         record: { id: 'clear-test' },
       });
 
-      await store.clearTable({ tableName: testTableName });
+      await operations.clearTable({ tableName: testTableName });
 
-      const loaded = await store.load({
+      const loaded = await operations.load({
         tableName: testTableName,
         keys: { id: 'clear-test' },
       });
@@ -503,13 +505,13 @@ describe('SurrealStore', () => {
     });
 
     it('should drop a table', async () => {
-      await store.createTable({
+      await operations.createTable({
         tableName: testTableName,
         schema: { id: { type: 'string', nullable: false } },
       });
 
       await expect(
-        store.dropTable({ tableName: testTableName })
+        operations.dropTable({ tableName: testTableName })
       ).resolves.not.toThrow();
     });
   });

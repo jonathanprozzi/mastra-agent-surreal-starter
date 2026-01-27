@@ -6,7 +6,7 @@
  */
 
 import type Surreal from 'surrealdb';
-import { WorkflowsStorage } from '@mastra/core/storage/domains';
+import { WorkflowsStorage } from '@mastra/core/storage';
 import type {
   WorkflowRun,
   WorkflowRuns,

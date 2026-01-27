@@ -6,7 +6,7 @@
  */
 
 import type Surreal from 'surrealdb';
-import { AgentsStorage } from '@mastra/core/storage/domains';
+import { AgentsStorage } from '@mastra/core/storage';
 import type {
   StorageAgentType,
   StorageCreateAgentInput,

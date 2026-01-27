@@ -6,7 +6,7 @@
  */
 
 import type Surreal from 'surrealdb';
-import { ScoresStorage } from '@mastra/core/storage/domains';
+import { ScoresStorage } from '@mastra/core/storage';
 import type { StoragePagination } from '@mastra/core/storage';
 import type {
   ScoreRowData,

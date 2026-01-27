@@ -6,7 +6,7 @@
  */
 
 import type Surreal from 'surrealdb';
-import { MemoryStorage } from '@mastra/core/storage/domains';
+import { MemoryStorage } from '@mastra/core/storage';
 import type {
   StorageResourceType,
   StorageListMessagesInput,

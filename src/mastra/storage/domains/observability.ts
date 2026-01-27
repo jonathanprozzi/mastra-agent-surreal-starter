@@ -9,22 +9,22 @@
  */
 
 import type Surreal from 'surrealdb';
-import { ObservabilityStorage } from '@mastra/core/storage/domains';
-import type {
-  CreateSpanArgs,
-  UpdateSpanArgs,
-  GetSpanArgs,
-  GetSpanResponse,
-  GetRootSpanArgs,
-  GetRootSpanResponse,
-  GetTraceArgs,
-  GetTraceResponse,
-  ListTracesArgs,
-  ListTracesResponse,
-  BatchCreateSpansArgs,
-  BatchUpdateSpansArgs,
-  BatchDeleteTracesArgs,
-} from '@mastra/core/storage/domains/observability';
+import {
+  ObservabilityStorage,
+  type CreateSpanArgs,
+  type UpdateSpanArgs,
+  type GetSpanArgs,
+  type GetSpanResponse,
+  type GetRootSpanArgs,
+  type GetRootSpanResponse,
+  type GetTraceArgs,
+  type GetTraceResponse,
+  type ListTracesArgs,
+  type ListTracesResponse,
+  type BatchCreateSpansArgs,
+  type BatchUpdateSpansArgs,
+  type BatchDeleteTracesArgs,
+} from '@mastra/core/storage';
 
 export class ObservabilitySurreal extends ObservabilityStorage {
   constructor(private db: Surreal) {
