@@ -261,6 +261,7 @@ export class MemorySurreal extends MemoryStorage {
     countQuery += ' GROUP ALL';
     const countResults = await this.db.query<[{ count: number }[]]>(countQuery, countParams);
     const total = countResults[0]?.[0]?.count || 0;
+    const baseCount = messages.length;
 
     // Merge in included messages for semantic recall
     if (include && include.length > 0) {
@@ -273,8 +274,9 @@ export class MemorySurreal extends MemoryStorage {
           messages.push(msg);
         }
       }
-      messages.sort((a, b) =>
-        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      const sortDirection = direction.toUpperCase() === 'DESC' ? -1 : 1;
+      messages.sort(
+        (a, b) => (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * sortDirection
       );
     }
 
@@ -283,7 +285,7 @@ export class MemorySurreal extends MemoryStorage {
       page,
       perPage: perPage === false ? false : perPage,
       total,
-      hasMore: perPage !== false && offset + messages.length < total,
+      hasMore: perPage !== false && offset + baseCount < total,
     };
   }
 

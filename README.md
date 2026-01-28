@@ -20,6 +20,12 @@ This is a lightweight Mastra agent starter with SurrealDB as the agent's store t
 - **Example Agent** — Working agent with tools, memory, and semantic recall
 - **Bun Compatible** — Fast development with Bun runtime
 
+## Prerequisites
+
+- Node.js >=22.13.0
+- Bun (recommended)
+- Docker (for local SurrealDB)
+
 ## Quick Start
 
 ```bash
@@ -212,6 +218,7 @@ This works because memory is configured with `scope: 'resource'` — the agent s
 **Note on Mastra v1 Memory Defaults:**
 - Semantic recall is **disabled by default** in v1 (must opt-in via `semanticRecall` config)
 - Default `lastMessages` is 10 (can be increased)
+- `options.generateTitle` is top-level and disabled by default (opt-in required)
 - This project explicitly enables semantic recall for cross-thread knowledge retrieval
 
 ### Full Semantic Recall Demo
@@ -249,6 +256,16 @@ OPENAI_API_KEY=sk-...           # Required - OpenAI embeddings for vector search
 ```
 
 **Note:** Semantic recall requires OpenAI API key for embeddings (Claude doesn't have an embedding model). You can use Claude for reasoning and OpenAI for embeddings — this is a common pattern.
+
+## CI/CD Init (disableInit)
+
+If you want to run schema setup in CI/CD and skip runtime DDL, pass `disableInit` and run `bun run db:setup` during deploy:
+
+```typescript
+import { SurrealStore } from "./src/mastra/storage";
+
+const store = new SurrealStore({ disableInit: true });
+```
 
 ## Scripts
 
@@ -318,6 +335,10 @@ The `SurrealStore` facade composes these 6 domain classes and delegates operatio
 
 1. **Retry Mechanism** - Implement exponential backoff for connection issues
 2. **Graph Relationships** - Leverage SurrealDB's graph capabilities for agent relationships
+
+## Migration Notes
+
+This project was migrated from Mastra v0.24.9 to v1.0. For details on v1 breaking changes and migration steps, see the [official Mastra v1 migration guide](https://mastra.ai/guides/migrations/upgrade-to-v1).
 
 ## Contributing
 

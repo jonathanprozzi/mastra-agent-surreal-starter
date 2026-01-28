@@ -89,8 +89,10 @@ export class SurrealStore extends MastraCompositeStore {
     this._agents = new AgentsSurreal(this.db);
     this._operations = new OperationsSurreal(this.db);
 
-    // Initialize agents table
-    await this._agents.init();
+    // Initialize agents table unless auto-init is disabled
+    if (!this.disableInit) {
+      await this._agents.init();
+    }
 
     // Set up the stores property for getStore() access
     this.stores = {

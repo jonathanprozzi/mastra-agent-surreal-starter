@@ -133,6 +133,10 @@ async function test() {
     console.log('7. Cleaning up test data...');
     await memory.deleteMessages(['msg-1', 'msg-2']);
     await memory.deleteThread({ threadId: 'test-thread-1' });
+    await workflows.deleteWorkflowRunById({
+      runId: 'run-abc123',
+      workflowName: 'text-processing',
+    });
     console.log('   Cleaned up test data\n');
 
     console.log('All tests passed!');
