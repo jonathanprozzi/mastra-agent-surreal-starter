@@ -61,12 +61,10 @@ export const memory = new Memory({
 - Important context:`,
     },
 
-    threads: {
-      generateTitle: {
-        model: anthropic('claude-haiku-4-5-20251001'),
-        instructions:
-          'Generate a concise 2-4 word title that captures the main topic. Use title case. No punctuation.',
-      },
+    generateTitle: {
+      model: anthropic('claude-haiku-4-5-20251001'),
+      instructions:
+        'Generate a concise 2-4 word title that captures the main topic. Use title case. No punctuation.',
     },
   },
 });

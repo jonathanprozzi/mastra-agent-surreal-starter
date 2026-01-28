@@ -1,75 +1,28 @@
 /**
  * Scores Domain for SurrealDB Storage
  *
- * Handles evaluations and scoring data.
+ * Handles scoring data for evaluations.
+ * Extends ScoresStorage from @mastra/core for v1 compatibility.
  */
 
 import type Surreal from 'surrealdb';
+import { ScoresStorage } from '@mastra/core/storage';
+import type { StoragePagination } from '@mastra/core/storage';
 import type {
-  EvalRow,
-  PaginationInfo,
-  PaginationArgs,
-  StoragePagination,
-} from '@mastra/core/storage';
-import type { ScoreRowData, ScoringSource } from '@mastra/core/scores';
+  ScoreRowData,
+  SaveScorePayload,
+  ListScoresResponse,
+  ScoringSource,
+} from '@mastra/core/evals';
 
-export class ScoresSurreal {
-  constructor(private db: Surreal) {}
-
-  // ============================================
-  // EVALS
-  // ============================================
-
-  async getEvalsByAgentName(agentName: string, type?: 'test' | 'live'): Promise<EvalRow[]> {
-    let query = 'SELECT * FROM mastra_evals WHERE agentName = $agentName';
-    const params: Record<string, any> = { agentName };
-
-    if (type) {
-      query += ' AND type = $type';
-      params.type = type;
-    }
-
-    query += ' ORDER BY createdAt DESC';
-
-    const results = await this.db.query<[EvalRow[]]>(query, params);
-    return results[0] || [];
+export class ScoresSurreal extends ScoresStorage {
+  constructor(private db: Surreal) {
+    super();
   }
 
-  async getEvals(
-    options?: { agentName?: string; type?: 'test' | 'live' } & PaginationArgs
-  ): Promise<PaginationInfo & { evals: EvalRow[] }> {
-    const { agentName, type, page = 1, perPage = 100 } = options || {};
-    const offset = (page - 1) * perPage;
-
-    let query = 'SELECT * FROM mastra_evals WHERE 1=1';
-    const params: Record<string, any> = { limit: perPage, offset };
-
-    if (agentName) {
-      query += ' AND agentName = $agentName';
-      params.agentName = agentName;
-    }
-    if (type) {
-      query += ' AND type = $type';
-      params.type = type;
-    }
-
-    query += ' ORDER BY createdAt DESC LIMIT $limit START $offset';
-
-    const results = await this.db.query<[EvalRow[]]>(query, params);
-    const evals = results[0] || [];
-
-    return {
-      evals,
-      page,
-      perPage,
-      total: evals.length,
-      hasMore: evals.length === perPage,
-    };
+  async dangerouslyClearAll(): Promise<void> {
+    await this.db.query('DELETE FROM mastra_scores');
   }
-
-  // ============================================
-  // SCORES
-  // ============================================
 
   async getScoreById({ id }: { id: string }): Promise<ScoreRowData | null> {
     const results = await this.db.query<[ScoreRowData[]]>(
@@ -79,17 +32,18 @@ export class ScoresSurreal {
     return results[0]?.[0] || null;
   }
 
-  async saveScore(score: ScoreRowData): Promise<{ score: ScoreRowData }> {
+  async saveScore(score: SaveScorePayload): Promise<{ score: ScoreRowData }> {
+    const now = new Date();
     const toSave = {
       ...score,
-      createdAt: score.createdAt || new Date(),
-      updatedAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
     };
     await this.db.create('mastra_scores', toSave);
-    return { score: toSave };
+    return { score: toSave as ScoreRowData };
   }
 
-  async getScoresByScorerId({
+  async listScoresByScorerId({
     scorerId,
     pagination,
     entityId,
@@ -101,12 +55,13 @@ export class ScoresSurreal {
     entityId?: string;
     entityType?: string;
     source?: ScoringSource;
-  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
-    const { page = 1, perPage = 100 } = pagination;
-    const offset = (page - 1) * perPage;
+  }): Promise<ListScoresResponse> {
+    const { page, perPage } = pagination;
+    const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
+    const offset = page * (perPage === false ? 0 : perPage);
 
     let query = 'SELECT * FROM mastra_scores WHERE scorerId = $scorerId';
-    const params: Record<string, any> = { scorerId, limit: perPage, offset };
+    const params: Record<string, any> = { scorerId, limit, offset };
 
     if (entityId) {
       query += ' AND entityId = $entityId';
@@ -127,34 +82,45 @@ export class ScoresSurreal {
     const scores = results[0] || [];
 
     return {
-      pagination: { page, perPage, total: scores.length, hasMore: scores.length === perPage },
+      pagination: {
+        page,
+        perPage,
+        total: scores.length,
+        hasMore: perPage !== false && scores.length === perPage,
+      },
       scores,
     };
   }
 
-  async getScoresByRunId({
+  async listScoresByRunId({
     runId,
     pagination,
   }: {
     runId: string;
     pagination: StoragePagination;
-  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
-    const { page = 1, perPage = 100 } = pagination;
-    const offset = (page - 1) * perPage;
+  }): Promise<ListScoresResponse> {
+    const { page, perPage } = pagination;
+    const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
+    const offset = page * (perPage === false ? 0 : perPage);
 
     const results = await this.db.query<[ScoreRowData[]]>(
       'SELECT * FROM mastra_scores WHERE runId = $runId ORDER BY createdAt DESC LIMIT $limit START $offset',
-      { runId, limit: perPage, offset }
+      { runId, limit, offset }
     );
     const scores = results[0] || [];
 
     return {
-      pagination: { page, perPage, total: scores.length, hasMore: scores.length === perPage },
+      pagination: {
+        page,
+        perPage,
+        total: scores.length,
+        hasMore: perPage !== false && scores.length === perPage,
+      },
       scores,
     };
   }
 
-  async getScoresByEntityId({
+  async listScoresByEntityId({
     entityId,
     entityType,
     pagination,
@@ -162,18 +128,24 @@ export class ScoresSurreal {
     entityId: string;
     entityType: string;
     pagination: StoragePagination;
-  }): Promise<{ pagination: PaginationInfo; scores: ScoreRowData[] }> {
-    const { page = 1, perPage = 100 } = pagination;
-    const offset = (page - 1) * perPage;
+  }): Promise<ListScoresResponse> {
+    const { page, perPage } = pagination;
+    const limit = perPage === false ? Number.MAX_SAFE_INTEGER : perPage;
+    const offset = page * (perPage === false ? 0 : perPage);
 
     const results = await this.db.query<[ScoreRowData[]]>(
       'SELECT * FROM mastra_scores WHERE entityId = $entityId AND entityType = $entityType ORDER BY createdAt DESC LIMIT $limit START $offset',
-      { entityId, entityType, limit: perPage, offset }
+      { entityId, entityType, limit, offset }
     );
     const scores = results[0] || [];
 
     return {
-      pagination: { page, perPage, total: scores.length, hasMore: scores.length === perPage },
+      pagination: {
+        page,
+        perPage,
+        total: scores.length,
+        hasMore: perPage !== false && scores.length === perPage,
+      },
       scores,
     };
   }

@@ -22,6 +22,7 @@ DEFINE INDEX idx_threads_resource_created ON mastra_threads FIELDS resourceId, c
 DEFINE TABLE mastra_messages SCHEMALESS PERMISSIONS FULL;
 DEFINE FIELD id ON mastra_messages TYPE string;
 DEFINE FIELD threadId ON mastra_messages TYPE string;
+DEFINE FIELD resourceId ON mastra_messages TYPE option<string>;
 DEFINE FIELD role ON mastra_messages TYPE string ASSERT $value IN ['user', 'assistant', 'system', 'tool'];
 -- content can be string or array (v2 format), using SCHEMALESS for flexibility
 DEFINE FIELD toolCalls ON mastra_messages TYPE option<array<object>>;
@@ -32,6 +33,7 @@ DEFINE FIELD embedding ON mastra_messages TYPE option<array<float>>;
 
 DEFINE INDEX idx_messages_id ON mastra_messages FIELDS id UNIQUE;
 DEFINE INDEX idx_messages_thread ON mastra_messages FIELDS threadId;
+DEFINE INDEX idx_messages_resource ON mastra_messages FIELDS resourceId;
 DEFINE INDEX idx_messages_thread_created ON mastra_messages FIELDS threadId, createdAt;
 -- HNSW index for semantic search (1536 dimensions for OpenAI embeddings)
 -- DEFINE INDEX idx_messages_embedding ON mastra_messages FIELDS embedding HNSW DIMENSION 1536 DIST COSINE TYPE F32;
@@ -58,24 +60,47 @@ DEFINE INDEX idx_workflow_snapshot_run ON mastra_workflow_snapshot FIELDS workfl
 DEFINE INDEX idx_workflow_snapshot_resource ON mastra_workflow_snapshot FIELDS resourceId;
 
 -- ============================================
--- 4. TRACES (OpenTelemetry data)
+-- 4. SPANS (OpenTelemetry data)
 -- ============================================
-DEFINE TABLE mastra_traces SCHEMAFULL PERMISSIONS FULL;
-DEFINE FIELD id ON mastra_traces TYPE string;
-DEFINE FIELD traceId ON mastra_traces TYPE string;
-DEFINE FIELD parentSpanId ON mastra_traces TYPE option<string>;
-DEFINE FIELD name ON mastra_traces TYPE string;
-DEFINE FIELD kind ON mastra_traces TYPE option<string>;
-DEFINE FIELD status ON mastra_traces TYPE option<object>;
-DEFINE FIELD attributes ON mastra_traces TYPE option<object>;
-DEFINE FIELD events ON mastra_traces TYPE option<array<object>>;
-DEFINE FIELD startTime ON mastra_traces TYPE datetime;
-DEFINE FIELD endTime ON mastra_traces TYPE option<datetime>;
-DEFINE FIELD createdAt ON mastra_traces TYPE datetime DEFAULT time::now();
+DEFINE TABLE mastra_ai_spans SCHEMALESS PERMISSIONS FULL;
+DEFINE FIELD traceId ON mastra_ai_spans TYPE string;
+DEFINE FIELD spanId ON mastra_ai_spans TYPE string;
+DEFINE FIELD parentSpanId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD name ON mastra_ai_spans TYPE string;
+DEFINE FIELD entityType ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD entityId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD entityName ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD userId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD organizationId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD resourceId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD runId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD sessionId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD threadId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD requestId ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD environment ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD source ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD serviceName ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD scope ON mastra_ai_spans TYPE option<object>;
+DEFINE FIELD spanType ON mastra_ai_spans TYPE option<string>;
+DEFINE FIELD attributes ON mastra_ai_spans TYPE option<object>;
+DEFINE FIELD metadata ON mastra_ai_spans TYPE option<object>;
+DEFINE FIELD tags ON mastra_ai_spans TYPE option<array<string>>;
+DEFINE FIELD links ON mastra_ai_spans TYPE option<array<object>>;
+DEFINE FIELD input ON mastra_ai_spans TYPE option<object>;
+DEFINE FIELD output ON mastra_ai_spans TYPE option<object>;
+DEFINE FIELD error ON mastra_ai_spans TYPE option<object>;
+DEFINE FIELD isEvent ON mastra_ai_spans TYPE option<bool>;
+DEFINE FIELD startedAt ON mastra_ai_spans TYPE datetime;
+DEFINE FIELD endedAt ON mastra_ai_spans TYPE option<datetime>;
+DEFINE FIELD createdAt ON mastra_ai_spans TYPE datetime DEFAULT time::now();
+DEFINE FIELD updatedAt ON mastra_ai_spans TYPE datetime DEFAULT time::now();
 
-DEFINE INDEX idx_traces_id ON mastra_traces FIELDS id UNIQUE;
-DEFINE INDEX idx_traces_trace ON mastra_traces FIELDS traceId;
-DEFINE INDEX idx_traces_name ON mastra_traces FIELDS name;
+DEFINE INDEX idx_spans_trace_span ON mastra_ai_spans FIELDS traceId, spanId UNIQUE;
+DEFINE INDEX idx_spans_trace ON mastra_ai_spans FIELDS traceId;
+DEFINE INDEX idx_spans_parent ON mastra_ai_spans FIELDS parentSpanId;
+DEFINE INDEX idx_spans_name ON mastra_ai_spans FIELDS name;
+DEFINE INDEX idx_spans_entity ON mastra_ai_spans FIELDS entityType, entityId;
+DEFINE INDEX idx_spans_started ON mastra_ai_spans FIELDS startedAt;
 
 -- ============================================
 -- 5. EVALS (evaluation results)

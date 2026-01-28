@@ -13,7 +13,7 @@ const processInput = createStep({
     processed: z.string(),
     wordCount: z.number(),
   }),
-  execute: async ({ inputData }) => {
+  execute: async (inputData) => {
     const text = inputData.text;
     return {
       processed: text.trim().toLowerCase(),
@@ -35,7 +35,7 @@ const analyzeResult = createStep({
     analysis: z.string(),
     isShort: z.boolean(),
   }),
-  execute: async ({ inputData }) => {
+  execute: async (inputData) => {
     const { processed, wordCount } = inputData;
     return {
       analysis: `Processed text has ${wordCount} words`,

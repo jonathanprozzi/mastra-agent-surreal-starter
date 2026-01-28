@@ -14,5 +14,5 @@ export { MemorySurreal } from './memory';
 export { WorkflowsSurreal } from './workflows';
 export { ScoresSurreal } from './scores';
 export { ObservabilitySurreal } from './observability';
-export { AgentsSurreal, type StoredAgent, type AgentInput } from './agents';
+export { AgentsSurreal } from './agents';
 export { OperationsSurreal } from './operations';

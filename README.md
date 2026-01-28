@@ -1,6 +1,6 @@
 # Mastra Agent SurrealDB Starter
 
-[![Node.js](https://img.shields.io/badge/Node.js->=20.9.0-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js->=22.13.0-green.svg)](https://nodejs.org/)
 [![SurrealDB](https://img.shields.io/badge/SurrealDB-v2.2-purple.svg)](https://surrealdb.com/)
 
 > **Community Project** - Built in collaboration with Claude Opus 4.5 to rapidly prototype [Mastra](https://mastra.ai) with SurrealDB, following established Mastra store patterns.
@@ -9,7 +9,8 @@ This is a lightweight Mastra agent starter with SurrealDB as the agent's store t
 
 ## Features
 
-- **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraStorage` with domain classes (matches official Mastra store patterns)
+- **Mastra v1 Compatible** — Built for Mastra v1.0+ with subpath imports and domain-based storage
+- **SurrealDB Storage Adapter** — `SurrealStore` extends `MastraCompositeStore` with domain classes (matches official Mastra store patterns)
 - **SurrealDB Vector Store** — `SurrealVector` extends `MastraVector` with native HNSW indexing
 - **Cross-Thread Semantic Recall** — Agent recalls information across different conversation threads via `scope: 'resource'`
 - **Working Memory** — Persistent user context and preferences across sessions
@@ -18,6 +19,12 @@ This is a lightweight Mastra agent starter with SurrealDB as the agent's store t
 - **Docker Setup** — One command to start SurrealDB locally
 - **Example Agent** — Working agent with tools, memory, and semantic recall
 - **Bun Compatible** — Fast development with Bun runtime
+
+## Prerequisites
+
+- Node.js >=22.13.0
+- Bun (recommended)
+- Docker (for local SurrealDB)
 
 ## Quick Start
 
@@ -86,7 +93,7 @@ The adapter implements storage for all Mastra data types (9 tables):
 | `mastra_threads`           | Conversation threads              |
 | `mastra_messages`          | Messages with optional embeddings |
 | `mastra_workflow_snapshot` | Suspended workflow state          |
-| `mastra_traces`            | OpenTelemetry data                |
+| `mastra_ai_spans`          | Observability spans (traces)      |
 | `mastra_evals`             | Evaluation results                |
 | `mastra_scorers`           | Scorer definitions                |
 | `mastra_scores`            | Scoring run data                  |
@@ -101,8 +108,12 @@ import { SurrealStore } from "./src/mastra/storage";
 const store = new SurrealStore();
 await store.init();
 
-// Save a thread (MastraStorage interface)
-const thread = await store.saveThread({
+// Get domain stores (v1 API)
+const memory = await store.getStore('memory');
+const workflows = await store.getStore('workflows');
+
+// Save a thread
+const thread = await memory.saveThread({
   thread: {
     id: "thread-1",
     resourceId: "user-123",
@@ -114,24 +125,24 @@ const thread = await store.saveThread({
 });
 
 // Save messages
-await store.saveMessages({
+await memory.saveMessages({
   messages: [
     {
       id: "msg-1",
       threadId: "thread-1",
       role: "user",
-      content: "Hello!",
+      content: [{ type: "text", text: "Hello!" }],
       createdAt: new Date(),
       type: "text",
     },
   ],
 });
 
-// Get messages from a thread
-const messages = await store.getMessages({ threadId: "thread-1" });
+// List messages from a thread
+const { messages } = await memory.listMessages({ threadId: "thread-1" });
 
 // Save resource (working memory)
-await store.saveResource({
+await memory.saveResource({
   resource: {
     id: "user-123",
     workingMemory: JSON.stringify({ theme: "dark" }),
@@ -150,7 +161,7 @@ await store.close();
 The `SurrealVector` class implements `MastraVector` for native HNSW vector search:
 
 ```typescript
-import { SurrealVector } from "./src/mastra/storage";
+import { SurrealVector } from "./src/mastra/vector";
 
 const vector = new SurrealVector();
 
@@ -204,6 +215,12 @@ This test:
 
 This works because memory is configured with `scope: 'resource'` — the agent searches across all threads for a given user, not just the current thread.
 
+**Note on Mastra v1 Memory Defaults:**
+- Semantic recall is **disabled by default** in v1 (must opt-in via `semanticRecall` config)
+- Default `lastMessages` is 10 (can be increased)
+- `options.generateTitle` is top-level and disabled by default (opt-in required)
+- This project explicitly enables semantic recall for cross-thread knowledge retrieval
+
 ### Full Semantic Recall Demo
 
 A comprehensive test covering multiple topics and cross-domain recall:
@@ -223,7 +240,7 @@ This test:
 
 ```bash
 # SurrealDB Connection
-SURREALDB_URL=ws://localhost:8000
+SURREALDB_URL=http://localhost:8000
 SURREALDB_NS=mastra
 SURREALDB_DB=development
 SURREALDB_USER=root
@@ -239,6 +256,16 @@ OPENAI_API_KEY=sk-...           # Required - OpenAI embeddings for vector search
 ```
 
 **Note:** Semantic recall requires OpenAI API key for embeddings (Claude doesn't have an embedding model). You can use Claude for reasoning and OpenAI for embeddings — this is a common pattern.
+
+## CI/CD Init (disableInit)
+
+If you want to run schema setup in CI/CD and skip runtime DDL, pass `disableInit` and run `bun run db:setup` during deploy:
+
+```typescript
+import { SurrealStore } from "./src/mastra/storage";
+
+const store = new SurrealStore({ disableInit: true });
+```
 
 ## Scripts
 
@@ -277,7 +304,7 @@ If running alongside other projects:
 
 ## Architecture
 
-The `SurrealStore` class extends `MastraStorage` from `@mastra/core/storage`, providing a SurrealDB-backed implementation of all storage operations. This follows the same pattern as official Mastra stores:
+The `SurrealStore` class extends `MastraCompositeStore` from `@mastra/core/storage`, providing a SurrealDB-backed implementation of all storage operations. This follows the same pattern as official Mastra stores:
 
 - **PostgresStore** (`@mastra/pg`) - Uses domain classes (MemoryPG, WorkflowsPG, etc.)
 - **LibSQLStore** (`@mastra/libsql`) - SQLite-compatible with WAL mode
@@ -308,6 +335,10 @@ The `SurrealStore` facade composes these 6 domain classes and delegates operatio
 
 1. **Retry Mechanism** - Implement exponential backoff for connection issues
 2. **Graph Relationships** - Leverage SurrealDB's graph capabilities for agent relationships
+
+## Migration Notes
+
+This project was migrated from Mastra v0.24.9 to v1.0. For details on v1 breaking changes and migration steps, see the [official Mastra v1 migration guide](https://mastra.ai/guides/migrations/upgrade-to-v1).
 
 ## Contributing
 
