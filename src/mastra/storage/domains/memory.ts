@@ -661,6 +661,22 @@ export class MemorySurreal extends MemoryStorage {
     workingMemory?: string;
     metadata?: Record<string, unknown>;
   }): Promise<StorageResourceType> {
+    // Check if resource exists first
+    const existing = await this.getResourceById({ resourceId });
+
+    // If resource doesn't exist, create it (upsert pattern like PG store)
+    if (!existing) {
+      const newResource: StorageResourceType = {
+        id: resourceId,
+        workingMemory,
+        metadata: metadata || {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      return this.saveResource({ resource: newResource });
+    }
+
+    // Resource exists, update it
     const updates: string[] = [];
     const params: Record<string, any> = { resourceId };
 
@@ -669,8 +685,9 @@ export class MemorySurreal extends MemoryStorage {
       params.workingMemory = workingMemory;
     }
     if (metadata !== undefined) {
+      // Merge metadata like PG store does
       updates.push('metadata = $metadata');
-      params.metadata = metadata;
+      params.metadata = { ...existing.metadata, ...metadata };
     }
     updates.push('updatedAt = time::now()');
 
@@ -679,9 +696,7 @@ export class MemorySurreal extends MemoryStorage {
       params
     );
 
-    const resource = results[0]?.[0];
-    if (!resource) throw new Error(`Resource ${resourceId} not found`);
-    return resource;
+    return results[0]?.[0] || existing;
   }
 }
 
